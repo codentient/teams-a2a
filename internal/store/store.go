@@ -37,9 +37,12 @@ type Pending struct {
 	// otherwise untrusted user input.
 	Nonce string `json:"nonce"`
 	// CardRef is the channel's id for the prompt card, used to retire it once answered.
-	CardRef     string    `json:"cardRef,omitempty"`
-	RequesterID string    `json:"requesterId"`
-	CreatedAt   time.Time `json:"createdAt"`
+	CardRef     string `json:"cardRef,omitempty"`
+	RequesterID string `json:"requesterId"`
+	// Incomplete is set when the person was not shown the whole request (the card was too
+	// large for the channel or failed to send). Such a request can be rejected, not approved.
+	Incomplete bool      `json:"incomplete,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 type Question struct {

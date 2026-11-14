@@ -62,7 +62,9 @@ type Sink interface {
 	Partial(fullText string)
 	Final(ctx context.Context, r Reply) error
 	Notice(ctx context.Context, text string) error
-	Prompt(ctx context.Context, p Prompt) (ref string, err error)
+	// Prompt shows a human-in-the-loop request. complete is false when the channel could not
+	// show the whole request; approving it is then refused.
+	Prompt(ctx context.Context, p Prompt) (ref string, complete bool, err error)
 	Retire(ctx context.Context, ref, summary string) error
 }
 
@@ -194,6 +196,9 @@ func (b *Bridge) cancel(ctx context.Context, t Turn, sink Sink) error {
 	return sink.Notice(ctx, "Cancelling the running request…")
 }
 
+const incompleteNotice = "This request couldn't be shown in full here, so it can't be approved from Teams. " +
+	"Reply **reject**, or review it in the agent's own interface."
+
 func (b *Bridge) mayAnswer(t Turn, p *store.Pending) bool {
 	return b.o.ApprovalPolicy == "anyone" || p.RequesterID == "" || p.RequesterID == t.User.ID
 }
@@ -218,6 +223,9 @@ func (b *Bridge) buildMessage(ctx context.Context, t Turn, sess *store.Session, 
 	case store.PendingToolApproval:
 		switch strings.ToLower(strings.Trim(strings.TrimSpace(t.Text), ".!")) {
 		case "approve", "approved", "yes", "y", "ok":
+			if p.Incomplete {
+				return nil, nil, sink.Notice(ctx, incompleteNotice)
+			}
 			return b.resolveApproval(ctx, t, sess, sink, true, "")
 		case "reject", "rejected", "deny", "no", "n":
 			return b.resolveApproval(ctx, t, sess, sink, false, "")
@@ -255,6 +263,8 @@ func (b *Bridge) fromSubmission(ctx context.Context, t Turn, sess *store.Session
 		return nil, nil, sink.Notice(ctx, "Only the person who started this request can answer it.")
 	}
 	switch {
+	case p.Kind == store.PendingToolApproval && action == "approve" && p.Incomplete:
+		return nil, nil, sink.Notice(ctx, incompleteNotice)
 	case p.Kind == store.PendingToolApproval && (action == "approve" || action == "reject"):
 		reason, _ := t.Submission["reason"].(string)
 		return b.resolveApproval(ctx, t, sess, sink, action == "approve", strings.TrimSpace(reason))
@@ -525,11 +535,13 @@ func (b *Bridge) pause(ctx context.Context, t Turn, sess *store.Session, acc *ac
 		}
 		prompt.Questions = p.Questions
 	}
-	ref, err := sink.Prompt(ctx, prompt)
+	ref, complete, err := sink.Prompt(ctx, prompt)
 	if err != nil {
 		b.o.Logger.Error("send prompt card", "err", err)
 	}
 	p.CardRef = ref
+	// If the card failed or could not show everything, the person never saw the full request.
+	p.Incomplete = err != nil || !complete
 	sess.Pending = p
 }
 

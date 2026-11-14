@@ -9,10 +9,9 @@ import (
 	"github.com/codentient/teams-a2a/internal/store"
 )
 
-const (
-	maxToolsOnCard = 10
-	maxArgsChars   = 1500
-)
+// maxCardBytes keeps a prompt card, plus the activity envelope around it, under the ~28 KB
+// Teams message limit.
+const maxCardBytes = 24 << 10
 
 type card = map[string]any
 
@@ -57,16 +56,19 @@ func submit(title, style, nonce, owner, action string) map[string]any {
 	return a
 }
 
-func truncateRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
+// PromptCard renders a human-in-the-loop request. complete reports whether the card shows
+// the whole request. When the full card would not fit in a Teams message, a fallback card is
+// returned instead: it never offers Approve, because the person could not see everything an
+// approval would cover.
+func PromptCard(p bridge.Prompt, requesterOnly bool) (c card, complete bool) {
+	full := fullPromptCard(p, requesterOnly)
+	if b, err := json.Marshal(full); err == nil && len(b) <= maxCardBytes {
+		return full, true
 	}
-	return string(r[:n]) + "…"
+	return tooLargeCard(p), false
 }
 
-// PromptCard renders a human-in-the-loop request.
-func PromptCard(p bridge.Prompt, requesterOnly bool) card {
+func fullPromptCard(p bridge.Prompt, requesterOnly bool) card {
 	var body []any
 	var actions []any
 	who := ""
@@ -80,23 +82,18 @@ func PromptCard(p bridge.Prompt, requesterOnly bool) card {
 		if len(p.Tools) > 1 {
 			intro += "s"
 		}
-		intro += ":"
+		body = append(body, textBlock(intro+":"))
 		if p.Hint != "" {
-			intro = p.Hint
+			body = append(body, textBlock("Agent's explanation:", subtle), textBlock(p.Hint))
 		}
-		body = append(body, textBlock(intro))
 		if p.Subagent != "" {
 			body = append(body, textBlock("Requested by sub-agent **"+p.Subagent+"**", subtle))
 		}
-		for i, t := range p.Tools {
-			if i == maxToolsOnCard {
-				body = append(body, textBlock(fmt.Sprintf("…and %d more", len(p.Tools)-maxToolsOnCard), subtle))
-				break
-			}
+		for _, t := range p.Tools {
 			body = append(body, textBlock(t.Name, bold))
 			if len(t.Args) > 0 {
 				b, _ := json.MarshalIndent(t.Args, "", "  ")
-				body = append(body, textBlock(truncateRunes(string(b), maxArgsChars), mono))
+				body = append(body, textBlock(string(b), mono))
 			}
 		}
 		body = append(body, map[string]any{
@@ -139,6 +136,22 @@ func PromptCard(p bridge.Prompt, requesterOnly bool) card {
 		body = append(body, textBlock(who, subtle))
 	}
 	return newCard(body, actions)
+}
+
+func tooLargeCard(p bridge.Prompt) card {
+	switch p.Kind {
+	case store.PendingToolApproval:
+		return newCard([]any{
+			textBlock("Approval needed", heading),
+			textBlock(fmt.Sprintf("The agent wants to run %d tool call(s), but the request is too large to show in Teams. "+
+				"It can't be approved here: reject it, or review it in the agent's own interface.", len(p.Tools))),
+		}, []any{submit("Reject", "destructive", p.Nonce, p.OwnerID, "reject")})
+	default:
+		return newCard([]any{
+			textBlock("The agent has a question", heading),
+			textBlock("The question is too large to show in Teams. Please answer it in the agent's own interface."),
+		}, nil)
+	}
 }
 
 // SummaryCard replaces an answered prompt so it cannot be submitted twice.

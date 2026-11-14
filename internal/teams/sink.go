@@ -264,9 +264,10 @@ func (s *Sink) Notice(ctx context.Context, text string) error {
 	return err
 }
 
-func (s *Sink) Prompt(ctx context.Context, p bridge.Prompt) (string, error) {
-	return s.o.Connector.ReplyToActivity(ctx, s.o.ServiceURL, s.o.ConversationID, s.o.ReplyToID,
-		AdaptiveCardActivity(PromptCard(p, s.o.RequesterOnly)))
+func (s *Sink) Prompt(ctx context.Context, p bridge.Prompt) (string, bool, error) {
+	c, complete := PromptCard(p, s.o.RequesterOnly)
+	ref, err := s.o.Connector.ReplyToActivity(ctx, s.o.ServiceURL, s.o.ConversationID, s.o.ReplyToID, AdaptiveCardActivity(c))
+	return ref, complete, err
 }
 
 func (s *Sink) Retire(ctx context.Context, ref, summary string) error {
