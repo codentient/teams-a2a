@@ -136,18 +136,24 @@ func run() error {
 		backoff = min(backoff*2, 30*time.Second)
 	}
 
+	// Bind before reporting ready, so /readyz never passes while the public port refuses connections.
+	ln, err := net.Listen("tcp", cfg.Server.Listen)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", cfg.Server.Listen, err)
+	}
 	go func() {
-		log.Info("listening", "addr", cfg.Server.Listen, "version", version, "routes", len(cfg.Routes), "store", cfg.Store.Type)
 		var err error
 		if cfg.Server.TLSCertFile != "" {
-			err = public.ListenAndServeTLS(cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
+			err = public.ServeTLS(ln, cfg.Server.TLSCertFile, cfg.Server.TLSKeyFile)
 		} else {
-			err = public.ListenAndServe()
+			err = public.Serve(ln)
 		}
 		if !errors.Is(err, http.ErrServerClosed) {
 			errc <- err
 		}
 	}()
+	srv.SetReady()
+	log.Info("listening", "addr", ln.Addr().String(), "version", version, "routes", len(cfg.Routes), "store", cfg.Store.Type)
 
 	select {
 	case <-ctx.Done():

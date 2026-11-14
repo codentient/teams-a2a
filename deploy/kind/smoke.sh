@@ -13,5 +13,11 @@ CTX="kind-$CLUSTER"
 kubectl --context "$CTX" delete job teams-sim --ignore-not-found
 kubectl --context "$CTX" apply -f deploy/kind/smoke.yaml
 helm --kube-context "$CTX" upgrade --install gw deploy/helm/teams-a2a-gateway -f deploy/kind/values.yaml --wait --timeout 180s
-kubectl --context "$CTX" wait --for=condition=complete job/teams-sim --timeout=180s
+if ! kubectl --context "$CTX" wait --for=condition=complete job/teams-sim --timeout=180s; then
+  echo "--- smoke test failed: simulator log ---" >&2
+  kubectl --context "$CTX" logs job/teams-sim >&2 || true
+  echo "--- gateway log ---" >&2
+  kubectl --context "$CTX" logs deploy/gw-teams-a2a-gateway >&2 || true
+  exit 1
+fi
 kubectl --context "$CTX" logs job/teams-sim
