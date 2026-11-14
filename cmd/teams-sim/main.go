@@ -79,16 +79,12 @@ func main() {
 		}
 		fmt.Printf("\n> %s\n", text)
 		b, _ := json.Marshal(act)
-		req, _ := http.NewRequest(http.MethodPost, *gateway+"/api/messages", bytes.NewReader(b))
-		req.Header.Set("Authorization", "Bearer "+fake.Token(*appID, serviceURL, nil))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
+		status, err := post(*gateway+"/api/messages", "Bearer "+fake.Token(*appID, serviceURL, nil), b)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
-		resp.Body.Close()
-		fmt.Printf("  gateway answered HTTP %d\n", resp.StatusCode)
+		fmt.Printf("  gateway answered HTTP %d\n", status)
 
 		// A turn is over when a final message or a prompt card arrives.
 		_, ok := fake.WaitFor(*wait, func(c testbot.Call) bool {
@@ -113,6 +109,28 @@ func main() {
 			fmt.Println("  (timed out waiting for a reply)")
 			os.Exit(2)
 		}
+	}
+}
+
+// post sends an activity, retrying connection errors for a while: in Kubernetes a Service can
+// lag behind the pod's readiness. Any HTTP response, including an error status, is final; the
+// gateway de-duplicates activity ids, so a retry can never run a turn twice.
+func post(url, authz string, body []byte) (int, error) {
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		req.Header.Set("Authorization", authz)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			return resp.StatusCode, nil
+		}
+		if time.Now().After(deadline) {
+			return 0, err
+		}
+		fmt.Printf("  (gateway not reachable yet, retrying: %v)\n", err)
+		time.Sleep(time.Second)
 	}
 }
 

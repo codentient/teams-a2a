@@ -137,6 +137,7 @@ func New(cfg *config.Config, d Deps) (*Server, error) {
 
 // Warmup fetches signing keys and agent cards so configuration errors surface at startup.
 // Agent card failures are logged, not fatal: the agent may come up after the gateway.
+// It does not mark the server ready: call SetReady once the public listener accepts traffic.
 func (s *Server) Warmup(ctx context.Context) error {
 	if err := s.validator.Refresh(ctx); err != nil {
 		return err
@@ -148,10 +149,15 @@ func (s *Server) Warmup(ctx context.Context) error {
 			s.log.Info("agent ready", "route", r.cfg.Name, "agent", card.Name, "streaming", card.Capabilities.Streaming, "hitl", r.agent.HITL(card))
 		}
 	}
+	return nil
+}
+
+// SetReady makes /readyz report ready. Call it only after the public listener is bound, so a
+// probe can never pass while /api/messages still refuses connections.
+func (s *Server) SetReady() {
 	s.readyMu.Lock()
 	s.ready = true
 	s.readyMu.Unlock()
-	return nil
 }
 
 // Handler is the public Bot Service endpoint.

@@ -127,6 +127,7 @@ routes:
 	if err := srv.Warmup(context.Background()); err != nil {
 		t.Fatalf("warmup: %v", err)
 	}
+	srv.SetReady()
 	e.srv = srv
 	e.gw = httptest.NewServer(srv.Handler())
 	t.Cleanup(func() {
