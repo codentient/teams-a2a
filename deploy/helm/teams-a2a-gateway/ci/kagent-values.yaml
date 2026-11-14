@@ -1,0 +1,45 @@
+replicaCount: 2
+workloadIdentity: {enabled: true, clientId: "00000000-0000-0000-0000-000000000001"}
+kagentToken: {enabled: true}
+envFrom: [{secretRef: {name: teams-a2a-redis}}]
+ingress: {enabled: true, className: nginx, host: teams-a2a.example.com, tls: {secretName: teams-a2a-tls}}
+networkPolicy: {enabled: true}
+config:
+  # Teams -> kagent 1.0, with the gateway running in the same AKS cluster as kagent.
+  #
+  # Identity model: the gateway calls kagent as its own Kubernetes ServiceAccount
+  # (kagent config.server.auth.serviceAccount.authority must be set). Every Teams user's
+  # conversation becomes a separate kagent Session owned by that ServiceAccount; the gateway
+  # keeps users apart with its own session keys (sessionScope: user) and the approval policy.
+  # For per-user ownership inside kagent, see examples/kagent-user-identity.yaml.
+  server:
+    listen: ":3978"
+    adminListen: ":9090"
+    maxConcurrentTurns: 256
+  
+  store:
+    type: redis # required when running more than one replica
+    sessionTTL: 168h # kagent expires idle Sessions after 7 days by default
+    redis:
+      address: teams-a2a-redis:6379
+      password: {env: REDIS_PASSWORD}
+  
+  routes:
+    - name: k8s-agent
+      bot:
+        appId: "00000000-0000-0000-0000-000000000001" # Entra app / Azure Bot app id
+        tenantId: "00000000-0000-0000-0000-0000000000aa"
+        # AKS workload identity: no secret anywhere. Needs a federated credential on the app
+        # registration for system:serviceaccount:teams-a2a:teams-a2a-gateway.
+        auth: {type: workloadIdentity}
+      allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+      sessionScope: user
+      welcome: "Hi! I'm the Kubernetes agent. Ask me about the cluster. Type /help for commands."
+      agent:
+        # kagent 1.0 serves every Agent through the controller on port 8083.
+        cardURL: http://kagent-controller.kagent.svc:8083/agents/kagent/k8s-agent/.well-known/agent-card.json
+        auth:
+          type: tokenFile
+          # Projected ServiceAccount token with audience "kagent-invocation" (see the Helm chart).
+          tokenFile: /var/run/secrets/kagent/token
+        hitl: auto # kagent cards declare https://kagent.dev/extensions/hitl/v1

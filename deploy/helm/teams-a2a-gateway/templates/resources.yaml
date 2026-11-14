@@ -1,0 +1,201 @@
+{{- if and (gt (int .Values.replicaCount) 1) (ne (.Values.config.store.type | default "memory") "redis") }}
+{{- fail "replicaCount > 1 requires config.store.type: redis (sessions, locks and de-duplication must be shared)" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tag.fullname" . }}
+  labels: {{- include "tag.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    {{- toYaml .Values.config | nindent 4 }}
+---
+{{- if .Values.serviceAccount.create }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "tag.serviceAccountName" . }}
+  labels: {{- include "tag.labels" . | nindent 4 }}
+  annotations:
+    {{- if .Values.workloadIdentity.enabled }}
+    azure.workload.identity/client-id: {{ required "workloadIdentity.clientId is required" .Values.workloadIdentity.clientId | quote }}
+    {{- end }}
+    {{- with .Values.serviceAccount.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+automountServiceAccountToken: false
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tag.fullname" . }}
+  labels: {{- include "tag.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "tag.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "tag.selectorLabels" . | nindent 8 }}
+        {{- if .Values.workloadIdentity.enabled }}
+        azure.workload.identity/use: "true"
+        {{- end }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ toYaml .Values.config | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "tag.serviceAccountName" . }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: gateway
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: ["-config", "/etc/teams-a2a/config.yaml"]
+          ports:
+            - {name: http, containerPort: 3978}
+            - {name: admin, containerPort: 9090}
+          {{- with .Values.env }}
+          env: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.envFrom }}
+          envFrom: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            httpGet: {path: /readyz, port: admin}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: admin}
+            periodSeconds: 10
+          startupProbe:
+            httpGet: {path: /healthz, port: admin}
+            failureThreshold: 30
+            periodSeconds: 2
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/teams-a2a, readOnly: true}
+            {{- if .Values.kagentToken.enabled }}
+            - {name: kagent-token, mountPath: /var/run/secrets/kagent, readOnly: true}
+            {{- end }}
+            {{- if .Values.userJWTKeySecret }}
+            - {name: user-jwt, mountPath: /var/run/secrets/user-jwt, readOnly: true}
+            {{- end }}
+      volumes:
+        - name: config
+          configMap: {name: {{ include "tag.fullname" . }}}
+        {{- if .Values.kagentToken.enabled }}
+        - name: kagent-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  audience: {{ .Values.kagentToken.audience }}
+                  expirationSeconds: {{ .Values.kagentToken.expirationSeconds }}
+        {{- end }}
+        {{- if .Values.userJWTKeySecret }}
+        - name: user-jwt
+          secret: {secretName: {{ .Values.userJWTKeySecret }}, defaultMode: 0400}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tag.fullname" . }}
+  labels: {{- include "tag.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  selector: {{- include "tag.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: http, port: {{ .Values.service.port }}, targetPort: http}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tag.fullname" . }}-admin
+  labels: {{- include "tag.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector: {{- include "tag.selectorLabels" . | nindent 4 }}
+  ports:
+    - {name: admin, port: {{ .Values.service.adminPort }}, targetPort: admin}
+{{- if .Values.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "tag.fullname" . }}
+  labels: {{- include "tag.labels" . | nindent 4 }}
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels: {{- include "tag.selectorLabels" . | nindent 6 }}
+{{- end }}
+{{- if .Values.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "tag.fullname" . }}
+  labels: {{- include "tag.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls.secretName }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ .Values.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /api/messages
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "tag.fullname" . }}
+                port: {name: http}
+{{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "tag.fullname" . }}
+  labels: {{- include "tag.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "tag.selectorLabels" . | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    # Public messaging port: traffic arrives through the ingress controller.
+    - ports: [{port: 3978}]
+    - ports: [{port: 9090}]
+      from:
+        {{- range .Values.networkPolicy.adminFromNamespaces }}
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: {{ . }}}
+        {{- end }}
+{{- end }}

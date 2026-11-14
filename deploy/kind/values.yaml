@@ -1,0 +1,19 @@
+replicaCount: 1
+image: {repository: teams-a2a-gateway, tag: dev, pullPolicy: Never}
+env:
+  - {name: BOT_SECRET, value: not-a-real-secret}
+config:
+  teams:
+    openIdMetadataURL: http://teams-sim:4000/v1/.well-known/openidconfiguration
+    loginAuthority: http://teams-sim:4000
+    serviceUrlAllowlist: [teams-sim]
+    allowInsecureServiceURLs: true
+  routes:
+    - name: demo
+      bot:
+        appId: "00000000-0000-0000-0000-000000000001"
+        tenantId: "00000000-0000-0000-0000-0000000000aa"
+        auth: {type: clientSecret, clientSecret: {env: BOT_SECRET}}
+      allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+      agent:
+        cardURL: http://demo-agent:8083/agents/kagent/demo/.well-known/agent-card.json

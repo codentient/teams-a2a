@@ -1,0 +1,39 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.19/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.19",
+  "version": "1.0.0",
+  "id": "${BOT_APP_ID}",
+  "developer": {
+    "name": "${DEVELOPER_NAME}",
+    "websiteUrl": "${WEBSITE_URL}",
+    "privacyUrl": "${WEBSITE_URL}/privacy",
+    "termsOfUseUrl": "${WEBSITE_URL}/terms"
+  },
+  "name": {"short": "${BOT_NAME}", "full": "${BOT_NAME} (A2A agent)"},
+  "description": {
+    "short": "Chat with ${BOT_NAME} from Teams.",
+    "full": "${BOT_NAME} is an AI agent connected to Microsoft Teams through the teams-a2a gateway using the Agent2Agent (A2A) protocol. AI-generated content may be incorrect."
+  },
+  "icons": {"color": "color.png", "outline": "outline.png"},
+  "accentColor": "#2F5BEA",
+  "bots": [
+    {
+      "botId": "${BOT_APP_ID}",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false,
+      "commandLists": [
+        {
+          "scopes": ["personal", "team", "groupChat"],
+          "commands": [
+            {"title": "/help", "description": "Show what the agent can do"},
+            {"title": "/new", "description": "Start a fresh conversation"},
+            {"title": "/cancel", "description": "Stop the running request"}
+          ]
+        }
+      ]
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}

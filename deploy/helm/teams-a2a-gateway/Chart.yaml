@@ -1,0 +1,6 @@
+apiVersion: v2
+name: teams-a2a-gateway
+description: Secure gateway that connects A2A agents (kagent 1.0 and others) to Microsoft Teams through Azure Bot Service.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

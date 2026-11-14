@@ -1,0 +1,52 @@
+# In-cluster smoke test: demo agent + Teams/Bot Service simulator. Used by deploy/kind/smoke.sh.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: demo-agent}
+spec:
+  selector: {matchLabels: {app: demo-agent}}
+  template:
+    metadata: {labels: {app: demo-agent}}
+    spec:
+      containers:
+        - name: agent
+          image: teams-a2a-tools:dev
+          command: [/usr/local/bin/demo-agent, -listen, ":8083", -base-url, "http://demo-agent:8083"]
+          ports: [{containerPort: 8083}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: demo-agent}
+spec:
+  selector: {app: demo-agent}
+  ports: [{port: 8083}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: teams-sim}
+spec:
+  selector: {app: teams-sim}
+  ports: [{port: 4000}]
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: teams-sim}
+spec:
+  backoffLimit: 0
+  template:
+    metadata: {labels: {app: teams-sim}}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: sim
+          image: teams-a2a-tools:dev
+          command:
+            - /usr/local/bin/teams-sim
+            - -listen=:4000
+            - -public-url=http://teams-sim:4000
+            - -gateway=http://gw-teams-a2a-gateway:3978
+            - -ready-url=http://gw-teams-a2a-gateway-admin:9090/readyz
+            - -wait=60s
+            - hello from kind
+            - delete pod web-1
+            - approve
+          ports: [{containerPort: 4000}]

@@ -1,0 +1,39 @@
+# One gateway, several bots: each Azure Bot registration (app id) is routed to its own A2A
+# agent. Inbound requests are routed by the validated token audience, never by anything the
+# caller controls.
+store:
+  type: redis
+  redis: {address: "redis.example.internal:6380", password: {file: /var/run/secrets/redis/password}, tls: true}
+
+routes:
+  - name: sre
+    bot:
+      appId: "00000000-0000-0000-0000-000000000001"
+      tenantId: "00000000-0000-0000-0000-0000000000aa"
+      auth: {type: clientSecret, clientSecret: {env: SRE_BOT_SECRET}}
+    allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+    allowedUsers: # optional: restrict to specific Entra object ids
+      - "11111111-1111-1111-1111-111111111111"
+    approvalPolicy: requester
+    agent:
+      cardURL: http://kagent-controller.kagent.svc:8083/agents/sre/incident-agent/.well-known/agent-card.json
+      auth: {type: tokenFile, tokenFile: /var/run/secrets/kagent/token}
+
+  - name: docs
+    bot:
+      appId: "00000000-0000-0000-0000-000000000002"
+      tenantId: "00000000-0000-0000-0000-0000000000aa"
+      auth: {type: managedIdentity} # user-assigned managed identity bot
+    allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+    rateLimit: {perMinute: 30, burst: 10}
+    agent:
+      # Any A2A agent works: a LangGraph/ADK/CrewAI agent, Foundry, another vendor...
+      cardURL: https://docs-agent.example.com/
+      auth:
+        type: oauth2ClientCredentials
+        oauth2:
+          tokenURL: https://login.microsoftonline.com/00000000-0000-0000-0000-0000000000aa/oauth2/v2.0/token
+          clientId: "22222222-2222-2222-2222-222222222222"
+          clientSecret: {env: DOCS_AGENT_CLIENT_SECRET}
+          scopes: ["api://docs-agent/.default"]
+      hitl: never

@@ -1,0 +1,88 @@
+replicaCount: 2 # >1 requires config.store.type=redis
+
+image:
+  repository: ghcr.io/codentient/teams-a2a-gateway
+  tag: "" # defaults to the chart appVersion
+  pullPolicy: IfNotPresent
+
+# Gateway configuration (see examples/*.yaml). Rendered into a ConfigMap; keep secrets out of
+# it and reference them with {env: ...} or {file: ...}.
+config:
+  server:
+    listen: ":3978"
+    adminListen: ":9090"
+  store:
+    type: memory
+  routes: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# AKS workload identity for the bot credential (bot.auth.type: workloadIdentity).
+workloadIdentity:
+  enabled: false
+  clientId: "" # the bot's Entra app id (federated credential subject: this ServiceAccount)
+
+# Projected ServiceAccount token that kagent 1.0 verifies with a TokenReview
+# (requires kagent config.server.auth.serviceAccount.authority). Use with
+# agent.auth: {type: tokenFile, tokenFile: /var/run/secrets/kagent/token}.
+kagentToken:
+  enabled: false
+  audience: kagent-invocation
+  expirationSeconds: 3600
+
+# Mount a Secret holding the user-JWT signing key (agent.auth.type: userJWT) at
+# /var/run/secrets/user-jwt.
+userJWTKeySecret: ""
+
+env: []
+envFrom: [] # e.g. a Secret with REDIS_PASSWORD / bot client secrets
+
+service:
+  type: ClusterIP
+  port: 3978
+  adminPort: 9090
+
+# Bot Service must reach https://<host>/api/messages over the internet. Only that path is
+# exposed; the admin port stays cluster-internal.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  host: teams-a2a.example.com
+  tls:
+    secretName: ""
+
+resources:
+  requests: {cpu: 50m, memory: 64Mi}
+  limits: {memory: 256Mi}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  fsGroup: 65532
+  seccompProfile: {type: RuntimeDefault}
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: {drop: [ALL]}
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+networkPolicy:
+  enabled: false
+  # Namespaces allowed to scrape /metrics and read the JWKS on the admin port.
+  adminFromNamespaces: [monitoring, kagent]
+
+terminationGracePeriodSeconds: 60
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}

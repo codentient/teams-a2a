@@ -1,0 +1,35 @@
+# Teams -> agentgateway -> kagent 1.0, with each Teams user as the kagent principal.
+#
+# kagent's "trusted-proxy" auth mode reads the user from a bearer JWT but does NOT verify it,
+# so a proxy in front of kagent must. Here the gateway mints a short-lived ES256 JWT per Teams
+# user (sub = Entra object id). agentgateway validates it against the gateway's JWKS
+# (http://teams-a2a-gateway-admin.teams-a2a.svc:9090/.well-known/jwks.json) and forwards it.
+# kagent then records each Session's creator as the real Teams user.
+#
+# Generate the key:  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out user-jwt.pem
+store:
+  type: redis
+  redis:
+    address: teams-a2a-redis:6379
+    password: {env: REDIS_PASSWORD}
+
+routes:
+  - name: k8s-agent
+    bot:
+      appId: "00000000-0000-0000-0000-000000000001"
+      tenantId: "00000000-0000-0000-0000-0000000000aa"
+      auth: {type: workloadIdentity}
+    allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+    sessionScope: user
+    agent:
+      cardURL: http://agentgateway.kagent.svc:8080/agents/kagent/k8s-agent/.well-known/agent-card.json
+      # The card advertises kagent's in-cluster controller URL; send traffic to the proxy instead.
+      endpoint: {url: "http://agentgateway.kagent.svc:8080/agents/kagent/k8s-agent"}
+      auth:
+        type: userJWT
+        userJWT:
+          issuer: https://teams-a2a-gateway.teams-a2a.svc
+          audience: [kagent]
+          signingKeyFile: /var/run/secrets/user-jwt/user-jwt.pem
+          ttl: 5m
+          subject: aadObjectId
