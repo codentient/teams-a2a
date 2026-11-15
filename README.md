@@ -85,6 +85,10 @@ To test the image and Helm chart in a throwaway kind cluster, run `deploy/kind/s
    - set `workloadIdentity.enabled` and `kagentToken.enabled`;
    - use `store.type: redis` for more than one replica;
    - expose only `/api/messages` through the Ingress.
+   - with a client secret instead of workload identity, keep it in a Secret and mount it with
+     `secretMounts: [{name: teams-bot, secretName: <secret>}]`, then set
+     `clientSecret: {file: /var/run/secrets/teams-a2a/teams-bot/clientSecret}`. The file is
+     re-read, so rotation needs no restart.
 4. **Teams app:** run `deploy/teams-app/package.sh`, then upload the zip in the Teams admin center.
 
 Example configs:

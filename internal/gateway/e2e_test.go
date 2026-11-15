@@ -53,6 +53,8 @@ type opts struct {
 	endorsements []string
 	// cardBase is the origin the agent card advertises (default: the test server itself).
 	cardBase string
+	// bot replaces the route's bot block (default: appId/tenantId inline, secret from env).
+	bot string
 }
 
 func newEnv(t *testing.T, o opts) *env {
@@ -75,6 +77,14 @@ func newEnv(t *testing.T, o opts) *env {
 	t.Cleanup(ts.Close)
 
 	t.Setenv("TEST_BOT_SECRET", "s3cret")
+	e.ms.SetClientSecret(appID, "s3cret")
+	bot := o.bot
+	if bot == "" {
+		bot = fmt.Sprintf(`
+      appId: %s
+      tenantId: %s
+      auth: {type: clientSecret, clientSecret: {env: TEST_BOT_SECRET}}`, appID, tenantID)
+	}
 	agentCfg := strings.ReplaceAll(o.agentCfg, "AGENT_URL", ts.URL)
 	if agentCfg == "" {
 		agentCfg = fmt.Sprintf(`
@@ -90,16 +100,13 @@ teams:
   allowInsecureServiceURLs: true
 routes:
   - name: demo
-    bot:
-      appId: %[2]s
-      tenantId: %[3]s
-      auth: {type: clientSecret, clientSecret: {env: TEST_BOT_SECRET}}
+    bot: %[5]s
     allowedTenants: [%[3]s]
     sessionScope: user
     streamInterval: 1s
     welcome: "Hi! I'm the demo agent."
     agent: %[4]s
-`, e.ms.Server.URL, appID, tenantID, agentCfg)
+`, e.ms.Server.URL, appID, tenantID, agentCfg, bot)
 	cfg, err := config.Parse([]byte(yamlCfg))
 	if err != nil {
 		t.Fatalf("config: %v", err)

@@ -89,6 +89,9 @@ spec:
             {{- if .Values.userJWTKeySecret }}
             - {name: user-jwt, mountPath: /var/run/secrets/user-jwt, readOnly: true}
             {{- end }}
+            {{- range .Values.secretMounts }}
+            - {name: secret-{{ .name }}, mountPath: /var/run/secrets/teams-a2a/{{ .name }}, readOnly: true}
+            {{- end }}
       volumes:
         - name: config
           configMap: {name: {{ include "tag.fullname" . }}}
@@ -104,6 +107,10 @@ spec:
         {{- if .Values.userJWTKeySecret }}
         - name: user-jwt
           secret: {secretName: {{ .Values.userJWTKeySecret }}, defaultMode: 0400}
+        {{- end }}
+        {{- range .Values.secretMounts }}
+        - name: secret-{{ .name }}
+          secret: {secretName: {{ required "secretMounts[].secretName is required" .secretName }}, defaultMode: 0400}
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector: {{- toYaml . | nindent 8 }}
