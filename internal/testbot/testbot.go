@@ -67,6 +67,9 @@ type Fake struct {
 	Key    *rsa.PrivateKey
 	// Endorsements are attached to the signing key in the JWKS.
 	Endorsements []string
+	// ClientSecrets, when set, makes the token endpoint accept the client-credentials grant
+	// only for these app id -> client secret pairs, like Entra would.
+	ClientSecrets map[string]string
 
 	mu      sync.Mutex
 	calls   []Call
@@ -102,9 +105,14 @@ func NewOn(l net.Listener) *Fake {
 	})
 	mux.HandleFunc("POST /{tenant}/oauth2/v2.0/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
-		if r.Form.Get("client_secret") == "" && r.Form.Get("client_assertion") == "" {
+		secret, assertion := r.Form.Get("client_secret"), r.Form.Get("client_assertion")
+		f.mu.Lock()
+		want, known := f.ClientSecrets[r.Form.Get("client_id")]
+		strict := len(f.ClientSecrets) > 0
+		f.mu.Unlock()
+		if (secret == "" && assertion == "") || (strict && secret != "" && (!known || secret != want)) {
 			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = io.WriteString(w, `{"error":"invalid_client"}`)
+			_, _ = io.WriteString(w, `{"error":"invalid_client","error_description":"invalid client id or secret"}`)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": BotToken, "expires_in": 3600, "token_type": "Bearer"})
@@ -120,6 +128,16 @@ func NewOn(l net.Listener) *Fake {
 }
 
 func (f *Fake) Close() { f.Server.Close() }
+
+// SetClientSecret makes the token endpoint require secret for appID.
+func (f *Fake) SetClientSecret(appID, secret string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ClientSecrets == nil {
+		f.ClientSecrets = map[string]string{}
+	}
+	f.ClientSecrets[appID] = secret
+}
 
 // FailPath makes Connector calls whose path contains substr return status.
 func (f *Fake) FailPath(substr string, status int) {

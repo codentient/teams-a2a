@@ -37,8 +37,14 @@ kagentToken:
 # /var/run/secrets/user-jwt.
 userJWTKeySecret: ""
 
+# Secrets mounted read-only at /var/run/secrets/teams-a2a/<name>/<key>, e.g. the Teams bot
+# credential: clientSecret: {file: /var/run/secrets/teams-a2a/teams-bot/clientSecret}.
+# Mounted files are re-read, so rotating the Secret needs no restart.
+secretMounts: []
+#  - {name: teams-bot, secretName: teams-bot-credentials}
+
 env: []
-envFrom: [] # e.g. a Secret with REDIS_PASSWORD / bot client secrets
+envFrom: [] # e.g. a Secret with REDIS_PASSWORD / bot client secrets, referenced as {env: ...}
 
 service:
   type: ClusterIP

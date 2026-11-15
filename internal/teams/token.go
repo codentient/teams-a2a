@@ -106,6 +106,10 @@ func NewTokenSource(teamsCfg config.Teams, bot config.Bot, hc *http.Client) (Tok
 	switch bot.Auth.Type {
 	case "clientSecret":
 		secret := bot.Auth.ClientSecret
+		// Fail at startup on a missing env var or unmounted file; the value is re-read per fetch.
+		if _, err := secret.Resolve(); err != nil {
+			return nil, fmt.Errorf("bot.auth.clientSecret: %w", err)
+		}
 		return &cachingSource{fetch: func(ctx context.Context) (string, time.Duration, error) {
 			s, err := secret.Resolve()
 			if err != nil {

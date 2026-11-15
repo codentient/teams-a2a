@@ -1,4 +1,13 @@
 # In-cluster smoke test: demo agent + Teams/Bot Service simulator. Used by deploy/kind/smoke.sh.
+# The bot client secret lives in a Secret that the chart mounts (see values.yaml); the
+# simulator's token endpoint only accepts that secret.
+apiVersion: v1
+kind: Secret
+metadata: {name: teams-bot-credentials}
+type: Opaque
+stringData:
+  clientSecret: not-a-real-secret
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata: {name: demo-agent}
@@ -46,6 +55,7 @@ spec:
             - -gateway=http://gw-teams-a2a-gateway:3978
             - -ready-url=http://gw-teams-a2a-gateway-admin:9090/readyz
             - -wait=60s
+            - -client-secret=not-a-real-secret
             - hello from kind
             - delete pod web-1
             - approve

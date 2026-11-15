@@ -28,6 +28,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:4000", "address for the fake Microsoft endpoints")
 	gateway := flag.String("gateway", "http://127.0.0.1:3978", "gateway base URL")
 	appID := flag.String("app-id", "00000000-0000-0000-0000-000000000001", "bot app id")
+	clientSecret := flag.String("client-secret", "", "if set, the fake token endpoint only accepts this secret for the bot app id")
 	tenant := flag.String("tenant", "00000000-0000-0000-0000-0000000000aa", "tenant id")
 	wait := flag.Duration("wait", 20*time.Second, "how long to wait for each reply")
 	publicURL := flag.String("public-url", "", "URL the gateway uses to reach this simulator (default: the listen address)")
@@ -40,6 +41,9 @@ func main() {
 		os.Exit(1)
 	}
 	fake := testbot.NewOn(l)
+	if *clientSecret != "" {
+		fake.SetClientSecret(*appID, *clientSecret)
+	}
 	if *publicURL != "" {
 		fake.Server.URL = strings.TrimRight(*publicURL, "/")
 	}
