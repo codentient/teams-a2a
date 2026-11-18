@@ -309,6 +309,18 @@ func (v *Validator) fetchKeys(ctx context.Context) (map[string]*signingKey, erro
 	return out, nil
 }
 
+// checkRSA applies the same rules to every signing key, whatever its JWK form (security review
+// L3): at least 2048 bits and an odd public exponent of at least 3.
+func checkRSA(pub *rsa.PublicKey) (*rsa.PublicKey, error) {
+	if pub.N.BitLen() < 2048 {
+		return nil, errors.New("rsa key too small")
+	}
+	if pub.E < 3 || pub.E%2 == 0 {
+		return nil, errors.New("rsa public exponent must be odd and at least 3")
+	}
+	return pub, nil
+}
+
 func rsaKey(k jwk) (*rsa.PublicKey, error) {
 	if k.N != "" && k.E != "" {
 		n, err := base64.RawURLEncoding.DecodeString(k.N)
@@ -319,11 +331,11 @@ func rsaKey(k jwk) (*rsa.PublicKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		pub := &rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(new(big.Int).SetBytes(e).Int64())}
-		if pub.N.BitLen() < 2048 {
-			return nil, errors.New("rsa key too small")
+		eb := new(big.Int).SetBytes(e)
+		if !eb.IsInt64() || eb.Int64() > 1<<31-1 {
+			return nil, errors.New("rsa exponent out of range")
 		}
-		return pub, nil
+		return checkRSA(&rsa.PublicKey{N: new(big.Int).SetBytes(n), E: int(eb.Int64())})
 	}
 	if len(k.X5c) > 0 {
 		der, err := base64.StdEncoding.DecodeString(k.X5c[0])
@@ -338,7 +350,7 @@ func rsaKey(k jwk) (*rsa.PublicKey, error) {
 		if !ok {
 			return nil, errors.New("certificate key is not RSA")
 		}
-		return pub, nil
+		return checkRSA(pub)
 	}
 	return nil, errors.New("key has neither n/e nor x5c")
 }

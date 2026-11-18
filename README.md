@@ -152,4 +152,18 @@ provenance attestation:
 
 ```bash
 gh attestation verify oci://ghcr.io/codentient/teams-a2a-gateway@sha256:<digest> --repo codentient/teams-a2a
+gh attestation verify oci://ghcr.io/codentient/teams-a2a-gateway@sha256:<digest> --repo codentient/teams-a2a \
+  --predicate-type https://spdx.dev/Document/v2.3   # the SBOM
 ```
+
+Base images are pinned by digest, GitHub Actions by commit SHA and `govulncheck` by version;
+Dependabot keeps them current.
+
+## Metrics
+
+The admin port serves Prometheus metrics at `/metrics`, including
+`teams_a2a_http_requests_total{code}` and `teams_a2a_http_request_duration_seconds` for
+`/api/messages` (success rate and latency), `teams_a2a_auth_failures_total{status}`,
+`teams_a2a_turns_total{route,outcome}`, `teams_a2a_turn_duration_seconds`,
+`teams_a2a_time_to_first_output_seconds`, `teams_a2a_connector_request_seconds` and
+`teams_a2a_build_info{version}`. Every human decision is also logged as an `audit=true` event.

@@ -17,6 +17,11 @@ type Metrics struct {
 	FirstOutput  *prometheus.HistogramVec
 	Connector    *prometheus.HistogramVec
 	InFlight     prometheus.Gauge
+	// HTTPRequests and HTTPDuration cover every /api/messages response by status code, so the
+	// success rate can drive alerts and canary analysis.
+	HTTPRequests *prometheus.CounterVec
+	HTTPDuration *prometheus.HistogramVec
+	BuildInfo    *prometheus.GaugeVec
 }
 
 func New() *Metrics {
@@ -48,7 +53,17 @@ func New() *Metrics {
 			Name: "teams_a2a_turns_in_flight", Help: "Agent turns currently running.",
 		}),
 	}
-	r.MustRegister(m.Activities, m.AuthFailures, m.Turns, m.TurnDuration, m.FirstOutput, m.Connector, m.InFlight,
+	m.HTTPRequests = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "teams_a2a_http_requests_total", Help: "Bot Service requests to /api/messages by HTTP status.",
+	}, []string{"code"})
+	m.HTTPDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "teams_a2a_http_request_duration_seconds", Help: "Time to answer Bot Service requests to /api/messages.",
+		Buckets: []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+	}, []string{"code"})
+	m.BuildInfo = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "teams_a2a_build_info", Help: "The running gateway version (always 1).",
+	}, []string{"version"})
+	r.MustRegister(m.HTTPRequests, m.HTTPDuration, m.BuildInfo, m.Activities, m.AuthFailures, m.Turns, m.TurnDuration, m.FirstOutput, m.Connector, m.InFlight,
 		prometheus.NewGoCollector(), prometheus.NewProcessCollector(prometheus.ProcessCollectorOpts{}))
 	return m
 }

@@ -85,7 +85,7 @@ func run() error {
 	agentClient := &http.Client{Transport: transport}
 
 	m := metrics.New()
-	srv, err := gateway.New(cfg, gateway.Deps{Store: st, Metrics: m, Logger: log, HTTPClient: httpClient, AgentHTTPClient: agentClient})
+	srv, err := gateway.New(cfg, gateway.Deps{Store: st, Metrics: m, Logger: log, HTTPClient: httpClient, AgentHTTPClient: agentClient, Version: version})
 	if err != nil {
 		return err
 	}
