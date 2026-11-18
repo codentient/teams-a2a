@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -417,10 +418,23 @@ func TestAskUserAnsweredByCard(t *testing.T) {
 	e.waitFinal(`Scaling in [{"answer":["production"]}]`)
 }
 
-func TestAgentFailureIsReported(t *testing.T) {
-	e := newEnv(t, opts{})
+// Security review L6: the agent's failure text can carry stack traces or internal hostnames, so
+// the user gets a generic message with a reference and the detail goes to the log only.
+func TestAgentFailureIsReportedWithoutInternalDetail(t *testing.T) {
+	var logs safeBuffer
+	e := newEnv(t, opts{logger: slog.New(slog.NewTextHandler(&logs, nil))})
 	e.send(e.activity("please fail"))
-	e.waitFinal("couldn't complete this request (failed): model provider returned 503")
+	final := e.waitFinal("couldn't complete this request (failed)")
+	if strings.Contains(final.Text(), "503") || strings.Contains(final.Text(), "model provider") {
+		t.Fatalf("the agent's failure detail reached the user: %q", final.Text())
+	}
+	ref := regexp.MustCompile("ref `([0-9a-f]{8})`").FindStringSubmatch(final.Text())
+	if ref == nil {
+		t.Fatalf("the user needs a reference to quote: %q", final.Text())
+	}
+	if !strings.Contains(logs.String(), "model provider returned 503") || !strings.Contains(logs.String(), ref[1]) {
+		t.Fatalf("the log must keep the detail under the same reference %s", ref[1])
+	}
 }
 
 func TestStreamingFallsBackWhenTeamsRejectsStreaming(t *testing.T) {

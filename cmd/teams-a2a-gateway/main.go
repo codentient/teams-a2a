@@ -160,7 +160,11 @@ func run() error {
 
 	select {
 	case <-ctx.Done():
-		log.Info("shutting down")
+		// Report not-ready first and keep serving while load balancers drop the pod, so no
+		// request reaches a closed port during a rollout.
+		srv.SetNotReady()
+		log.Info("shutting down", "drainDelay", cfg.Server.DrainDelay.Duration)
+		time.Sleep(cfg.Server.DrainDelay.Duration)
 	case err := <-errc:
 		return err
 	}
