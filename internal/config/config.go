@@ -116,6 +116,9 @@ type Route struct {
 	// ApprovalPolicy decides who may answer a human-in-the-loop prompt:
 	// "requester" (default) or "anyone" in the conversation.
 	ApprovalPolicy string `json:"approvalPolicy"`
+	// ApprovalTTL is how long a tool approval request can be answered. After that any answer
+	// rejects it, so a tool never runs on a stale approval.
+	ApprovalTTL Duration `json:"approvalTTL"`
 }
 
 type RateLimit struct {
@@ -327,6 +330,9 @@ func (c *Config) applyDefaults() {
 		if r.ApprovalPolicy == "" {
 			r.ApprovalPolicy = "requester"
 		}
+		if r.ApprovalTTL.Duration == 0 {
+			r.ApprovalTTL.Duration = 30 * time.Minute
+		}
 		if r.Bot.Auth.Type == "" {
 			r.Bot.Auth.Type = "clientSecret"
 		}
@@ -442,6 +448,9 @@ func (c *Config) Validate() error {
 		}
 		add(oneOf(p+".sessionScope", r.SessionScope, "conversation", "user"))
 		add(oneOf(p+".approvalPolicy", r.ApprovalPolicy, "requester", "anyone"))
+		if r.ApprovalTTL.Duration < time.Minute || r.ApprovalTTL.Duration > 24*time.Hour {
+			add(fmt.Errorf("%s: approvalTTL must be between 1m and 24h", p))
+		}
 		if r.StreamInterval.Duration < time.Second {
 			add(fmt.Errorf("%s: streamInterval must be >= 1s (Teams throttles streaming at 1 request/second)", p))
 		}

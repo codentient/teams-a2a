@@ -117,6 +117,7 @@ func New(cfg *config.Config, d Deps) (*Server, error) {
 			TurnTimeout:      rc.TurnTimeout.Duration,
 			ShowToolActivity: rc.ToolActivityEnabled(),
 			ApprovalPolicy:   rc.ApprovalPolicy,
+			ApprovalTTL:      rc.ApprovalTTL.Duration,
 			ForwardMetadata:  rc.Agent.ForwardMetadataEnabled(),
 			Logger:           d.Logger.With("route", name),
 			ObserveTurn: func(outcome string, total, first time.Duration) {

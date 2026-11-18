@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const minimal = `
@@ -139,6 +140,22 @@ func TestAgentCardsConfig(t *testing.T) {
 		cfg := strings.Replace(minimal, agent, agent+"\n      cards: {enabled: true, allowedHosts: [\""+bad+"\"]}", 1)
 		if _, err := Parse([]byte(cfg)); err == nil || !strings.Contains(err.Error(), "allowedHosts") {
 			t.Errorf("allowedHosts %q must be rejected, got %v", bad, err)
+		}
+	}
+}
+
+func TestApprovalTTL(t *testing.T) {
+	c, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Routes[0].ApprovalTTL.Duration != 30*time.Minute {
+		t.Fatalf("default approvalTTL = %v, want 30m", c.Routes[0].ApprovalTTL.Duration)
+	}
+	for _, v := range []string{"30s", "48h"} {
+		cfg := strings.Replace(minimal, "allowedTenants: [tenant-1]", "allowedTenants: [tenant-1]\n    approvalTTL: "+v, 1)
+		if _, err := Parse([]byte(cfg)); err == nil || !strings.Contains(err.Error(), "approvalTTL") {
+			t.Errorf("approvalTTL %s must be rejected, got %v", v, err)
 		}
 	}
 }

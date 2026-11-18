@@ -54,6 +54,7 @@ type fakeSink struct {
 	prompts  []Prompt
 	finals   []Reply
 	notices  []string
+	retired  []string
 }
 
 func (s *fakeSink) Progress(string) {}
@@ -79,7 +80,12 @@ func (s *fakeSink) Prompt(_ context.Context, p Prompt) (string, bool, error) {
 	}
 	return "card-1", s.complete, nil
 }
-func (s *fakeSink) Retire(context.Context, string, string) error { return nil }
+func (s *fakeSink) Retire(_ context.Context, _ string, summary string) error {
+	s.mu.Lock()
+	s.retired = append(s.retired, summary)
+	s.mu.Unlock()
+	return nil
+}
 func (s *fakeSink) lastNotice() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -102,7 +108,7 @@ func approvalPause(tools ...map[string]any) []a2a.Event {
 }
 
 // pausedBridge runs one turn that ends in a tool approval request and returns the pieces.
-func pausedBridge(t *testing.T, sink *fakeSink) (*Bridge, *fakeAgent, identity.User) {
+func pausedBridge(t *testing.T, sink *fakeSink, opts ...func(*Options)) (*Bridge, *fakeAgent, identity.User) {
 	t.Helper()
 	ag := &fakeAgent{}
 	first := true
@@ -113,7 +119,11 @@ func pausedBridge(t *testing.T, sink *fakeSink) (*Bridge, *fakeAgent, identity.U
 		}
 		return []a2a.Event{a2a.NewMessage(a2a.MessageRoleAgent, a2a.NewTextPart("done"))}
 	}
-	b := New(Options{Store: store.NewMemory(time.Hour, 100), Agent: ag, TurnTimeout: time.Minute, ApprovalPolicy: "requester"})
+	o := Options{Store: store.NewMemory(time.Hour, 100), Agent: ag, TurnTimeout: time.Minute, ApprovalPolicy: "requester"}
+	for _, f := range opts {
+		f(&o)
+	}
+	b := New(o)
 	alice := identity.User{ID: "alice", Name: "Alice"}
 	if err := b.Handle(context.Background(), Turn{SessionKey: "s", User: alice, Text: "clean up"}, sink); err != nil {
 		t.Fatal(err)
@@ -136,7 +146,7 @@ func hitlResponse(t *testing.T, m *a2a.Message) string {
 func TestApprovalAllowedWhenRequestShownInFull(t *testing.T) {
 	sink := &fakeSink{complete: true}
 	b, ag, alice := pausedBridge(t, sink)
-	_ = b.Handle(context.Background(), Turn{SessionKey: "s", User: alice, Text: "approve"}, sink)
+	_ = b.Handle(context.Background(), Turn{SessionKey: "s", User: alice, Submission: submission(sink.prompts[0].Nonce, "approve")}, sink)
 	if len(ag.sent) != 2 || !strings.Contains(hitlResponse(t, ag.sent[1]), "approved:true") {
 		t.Fatalf("expected the approval to reach the agent, sent=%d", len(ag.sent))
 	}
