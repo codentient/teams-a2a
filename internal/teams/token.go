@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/codentient/teams-a2a/internal/config"
+	"github.com/codentient/teams-a2a/internal/httpx"
 )
 
 // TokenSource returns a bearer token for outbound Bot Connector calls.
@@ -101,6 +102,7 @@ func doTokenRequest(hc *http.Client, req *http.Request) (string, time.Duration, 
 
 // NewTokenSource builds the outbound credential for a bot according to its auth type.
 func NewTokenSource(teamsCfg config.Teams, bot config.Bot, hc *http.Client) (TokenSource, error) {
+	hc = httpx.NoRedirects(hc)
 	tokenURL := strings.TrimRight(teamsCfg.LoginAuthority, "/") + "/" + url.PathEscape(bot.TenantID) + "/oauth2/v2.0/token"
 	scope := teamsCfg.ConnectorScope
 	switch bot.Auth.Type {

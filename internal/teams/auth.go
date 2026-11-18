@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+
+	"github.com/codentient/teams-a2a/internal/httpx"
 )
 
 // AuthError is returned for a request that fails authentication. Status is the HTTP status
@@ -70,6 +72,7 @@ const (
 )
 
 func NewValidator(metadataURL, issuer string, appIDs, channels []string, httpClient *http.Client) *Validator {
+	httpClient = httpx.NoRedirects(httpClient)
 	aud := make(map[string]string, len(appIDs))
 	for _, id := range appIDs {
 		aud[strings.ToLower(id)] = id

@@ -24,6 +24,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/codentient/teams-a2a/internal/config"
+	"github.com/codentient/teams-a2a/internal/httpx"
 	"github.com/codentient/teams-a2a/internal/identity"
 )
 
@@ -236,6 +237,7 @@ func (s *UserJWTSigner) Authorization(_ context.Context, user identity.User) (st
 
 // NewCredentials builds the agent credential for a route.
 func NewCredentials(cfg config.AgentAuth, hc *http.Client) (Credentials, *UserJWTSigner, error) {
+	hc = httpx.NoRedirects(hc)
 	switch cfg.Type {
 	case "none":
 		return noCredentials{}, nil, nil

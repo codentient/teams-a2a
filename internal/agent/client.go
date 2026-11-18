@@ -21,6 +21,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2acompat/a2av0"
 
 	"github.com/codentient/teams-a2a/internal/config"
+	"github.com/codentient/teams-a2a/internal/httpx"
 	"github.com/codentient/teams-a2a/internal/identity"
 )
 
@@ -40,7 +41,7 @@ type Agent struct {
 }
 
 func New(cfg config.Agent, creds Credentials, hc *http.Client) *Agent {
-	return &Agent{cfg: cfg, creds: creds, hc: hc}
+	return &Agent{cfg: cfg, creds: creds, hc: httpx.NoRedirects(hc)}
 }
 
 // cardParser accepts both A2A 1.0 cards and legacy 0.3 cards.
