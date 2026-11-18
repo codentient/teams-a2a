@@ -42,12 +42,15 @@ type Server struct {
 	// Listen is the public address that receives Bot Service traffic.
 	Listen string `json:"listen"`
 	// AdminListen serves /healthz, /readyz, /metrics and the user-JWT JWKS. Keep it private.
-	AdminListen        string   `json:"adminListen"`
-	TLSCertFile        string   `json:"tlsCertFile,omitempty"`
-	TLSKeyFile         string   `json:"tlsKeyFile,omitempty"`
-	MaxBodyBytes       int64    `json:"maxBodyBytes"`
-	MaxConcurrentTurns int      `json:"maxConcurrentTurns"`
-	ShutdownTimeout    Duration `json:"shutdownTimeout"`
+	AdminListen        string `json:"adminListen"`
+	TLSCertFile        string `json:"tlsCertFile,omitempty"`
+	TLSKeyFile         string `json:"tlsKeyFile,omitempty"`
+	MaxBodyBytes       int64  `json:"maxBodyBytes"`
+	MaxConcurrentTurns int    `json:"maxConcurrentTurns"`
+	// MaxTurnsPerUser caps one user's concurrent turns across chats (default 3), so a single
+	// user cannot hold most of MaxConcurrentTurns.
+	MaxTurnsPerUser int      `json:"maxTurnsPerUser"`
+	ShutdownTimeout Duration `json:"shutdownTimeout"`
 	// DrainDelay is how long the gateway reports not-ready on shutdown before it stops
 	// accepting connections, so load balancers stop routing to it first.
 	DrainDelay Duration `json:"drainDelay"`
@@ -281,6 +284,9 @@ func (c *Config) applyDefaults() {
 	if s.MaxConcurrentTurns == 0 {
 		s.MaxConcurrentTurns = 256
 	}
+	if s.MaxTurnsPerUser == 0 {
+		s.MaxTurnsPerUser = 3
+	}
 	if s.ShutdownTimeout.Duration == 0 {
 		s.ShutdownTimeout.Duration = 30 * time.Second
 	}
@@ -455,6 +461,9 @@ func (c *Config) Validate() error {
 		add(errors.New("server: tlsCertFile and tlsKeyFile must be set together"))
 	}
 	add(oneOf("server.logLevel", c.Server.LogLevel, "debug", "info", "warn", "error"))
+	if c.Server.MaxTurnsPerUser < 1 || c.Server.MaxTurnsPerUser > c.Server.MaxConcurrentTurns {
+		add(errors.New("server.maxTurnsPerUser must be between 1 and server.maxConcurrentTurns"))
+	}
 	if c.Server.DrainDelay.Duration < 0 || c.Server.DrainDelay.Duration >= c.Server.ShutdownTimeout.Duration {
 		add(errors.New("server.drainDelay must be at least 0 and shorter than server.shutdownTimeout"))
 	}

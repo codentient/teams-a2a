@@ -45,6 +45,8 @@ type Server struct {
 	cfg         *config.Config
 	refreshOnce sync.Once
 	rejectLog   *rate.Limiter
+	userMu      sync.Mutex
+	userTurns   map[string]int
 	log         *slog.Logger
 	validator   *teams.Validator
 	store       store.Store
@@ -97,6 +99,7 @@ func New(cfg *config.Config, d Deps) (*Server, error) {
 		baseCtx:   ctx,
 		cancel:    cancel,
 		rejectLog: rate.NewLimiter(1, 5),
+		userTurns: map[string]int{},
 	}
 	policy := teams.ServiceURLPolicy{Allowlist: cfg.Teams.ServiceURLAllowlist, AllowInsecure: cfg.Teams.AllowInsecureServiceURLs}
 	for _, rc := range cfg.Routes {
@@ -362,9 +365,15 @@ func (s *Server) onMessage(rt *route, act *teams.Activity) string {
 		"teams-a2a-gateway/locale":           act.Locale,
 	}
 
+	user := act.From.AADObjectID
+	if !s.acquireUserTurn(user) {
+		notice(fmt.Sprintf("You already have %d requests running. Please wait for one to finish.", s.cfg.Server.MaxTurnsPerUser))
+		return "user_busy"
+	}
 	select {
 	case s.sem <- struct{}{}:
 	default:
+		s.releaseUserTurn(user)
 		notice("I'm handling a lot of requests right now. Please try again in a minute.")
 		return "overloaded"
 	}
@@ -381,7 +390,7 @@ func (s *Server) onMessage(rt *route, act *teams.Activity) string {
 		Logger:         s.log.With("route", rt.cfg.Name),
 	})
 	s.background(func(ctx context.Context) {
-		defer func() { <-s.sem }()
+		defer func() { <-s.sem; s.releaseUserTurn(user) }()
 		s.metrics.InFlight.Inc()
 		defer s.metrics.InFlight.Dec()
 		if rt.cfg.DenyGuests && !s.memberAllowed(ctx, rt, act) {
@@ -392,6 +401,26 @@ func (s *Server) onMessage(rt *route, act *teams.Activity) string {
 		}
 	}, rt.cfg.TurnTimeout.Duration+2*time.Minute)
 	return "accepted"
+}
+
+// acquireUserTurn reserves one of the user's MaxTurnsPerUser concurrent turns (security review
+// L1), so a single user cannot hold most of the global MaxConcurrentTurns.
+func (s *Server) acquireUserTurn(user string) bool {
+	s.userMu.Lock()
+	defer s.userMu.Unlock()
+	if s.userTurns[user] >= s.cfg.Server.MaxTurnsPerUser {
+		return false
+	}
+	s.userTurns[user]++
+	return true
+}
+
+func (s *Server) releaseUserTurn(user string) {
+	s.userMu.Lock()
+	defer s.userMu.Unlock()
+	if s.userTurns[user]--; s.userTurns[user] <= 0 {
+		delete(s.userTurns, user)
+	}
 }
 
 // agentClient returns hc, or a copy whose transport waits up to timeout for the agent's first

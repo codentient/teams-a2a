@@ -219,6 +219,15 @@ func (b *Bridge) cancel(ctx context.Context, t Turn, sink Sink) error {
 	return sink.Notice(ctx, "Cancelling the running request…")
 }
 
+const (
+	// maxAnswerBytes caps the text of one answer (security review L2).
+	maxAnswerBytes = 1 << 20
+	// maxPartialOnError bounds the partial answer shown when a turn is stopped.
+	maxPartialOnError = 20_000
+	// partialEvery throttles how often the accumulated text is rendered for streaming.
+	partialEvery = 200 * time.Millisecond
+)
+
 const incompleteNotice = "This request couldn't be shown in full here, so it can't be approved from Teams. " +
 	"Reply **reject**, or review it in the agent's own interface."
 
@@ -439,6 +448,8 @@ func (b *Bridge) run(ctx context.Context, log *slog.Logger, t Turn, sess *store.
 	accepted := false
 	var streamErr error
 	savedRunning := false
+	tooLong := false
+	var lastPartial time.Time
 	for ev, err := range b.o.Agent.Stream(ctx, msg) {
 		if err != nil {
 			streamErr = err
@@ -466,11 +477,20 @@ func (b *Bridge) run(ctx context.Context, log *slog.Logger, t Turn, sess *store.
 				sink.Progress(p)
 			}
 		}
+		if acc.size > maxAnswerBytes {
+			tooLong = true
+			break
+		}
 		if u.textChanged {
 			if firstOutput == 0 {
 				firstOutput = time.Since(start)
 			}
-			sink.Partial(acc.text())
+			// Rendering the whole answer per chunk would be quadratic; the sink sends updates
+			// at most every StreamInterval anyway, and Final always carries the full text.
+			if time.Since(lastPartial) >= partialEvery {
+				sink.Partial(acc.text())
+				lastPartial = time.Now()
+			}
 		}
 	}
 
@@ -491,6 +511,14 @@ func (b *Bridge) run(ctx context.Context, log *slog.Logger, t Turn, sess *store.
 	}
 
 	switch {
+	case tooLong:
+		outcome = "too_long"
+		if acc.taskID != "" {
+			_ = b.o.Agent.Cancel(fctx, acc.taskID)
+		}
+		log.Warn("agent answer exceeded the size limit; stopped", "bytes", acc.size, "task", acc.taskID)
+		_ = sink.Final(fctx, Reply{IsError: true, Text: withPartial(truncate(acc.text(), maxPartialOnError),
+			"✂️ The agent's answer was too long (over 1 MB), so I stopped it. Please ask for something more specific.")})
 	case errors.Is(ctx.Err(), context.DeadlineExceeded):
 		outcome = "timeout"
 		if acc.taskID != "" {
