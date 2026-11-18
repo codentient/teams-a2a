@@ -393,9 +393,6 @@ func (c *Config) Validate() error {
 	}
 	add(validURL("teams.openIdMetadataURL", c.Teams.OpenIDMetadataURL, false))
 	add(validURL("teams.loginAuthority", c.Teams.LoginAuthority, false))
-	if len(c.Routes) == 0 {
-		add(errors.New("at least one route is required"))
-	}
 	names := map[string]bool{}
 	appIDs := map[string]bool{}
 	for i, r := range c.Routes {
