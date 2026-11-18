@@ -130,3 +130,18 @@ make test        # go vet + race tests (unit + end-to-end against fake Teams and
 make image       # distroless image
 make smoke       # kind cluster smoke test of image + Helm chart
 ```
+
+## Images
+
+CI publishes `ghcr.io/codentient/teams-a2a-gateway` (linux/amd64 and linux/arm64) only after
+the tests and the kind smoke test pass:
+
+- every push to `main` as `sha-<commit>` and `main`;
+- every `v*` tag as `<version>`, for example `v0.2.0` as `0.2.0`.
+
+Tags move; deploy by digest. The digest is in the run summary. Each image has a GitHub build
+provenance attestation:
+
+```bash
+gh attestation verify oci://ghcr.io/codentient/teams-a2a-gateway@sha256:<digest> --repo codentient/teams-a2a
+```
