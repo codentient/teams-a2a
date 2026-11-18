@@ -35,6 +35,7 @@ type route struct {
 	bridge    *bridge.Bridge
 	connector *teams.Connector
 	limiter   *userLimiter
+	roles     *roleCache
 }
 
 // Server handles Bot Service traffic for every configured route.
@@ -131,6 +132,7 @@ func New(cfg *config.Config, d Deps) (*Server, error) {
 		s.routes[strings.ToLower(rc.Bot.AppID)] = &route{
 			cfg: rc, agent: ag, bridge: br, connector: conn,
 			limiter: newUserLimiter(rc.RateLimit.PerMinute, rc.RateLimit.Burst),
+			roles:   newRoleCache(time.Hour, 10_000),
 		}
 	}
 	return s, nil
@@ -354,11 +356,76 @@ func (s *Server) onMessage(rt *route, act *teams.Activity) string {
 		defer func() { <-s.sem }()
 		s.metrics.InFlight.Inc()
 		defer s.metrics.InFlight.Dec()
+		if rt.cfg.DenyGuests && !s.memberAllowed(ctx, rt, act) {
+			return
+		}
 		if err := rt.bridge.Handle(ctx, turn, sink); err != nil {
 			s.log.Error("turn failed", "route", rt.cfg.Name, "err", err)
 		}
 	}, rt.cfg.TurnTimeout.Duration+2*time.Minute)
 	return "accepted"
+}
+
+// memberAllowed enforces denyGuests: guests are refused, and so is everyone whose role cannot
+// be verified. It runs in the background turn because the roster lookup is a network call.
+func (s *Server) memberAllowed(ctx context.Context, rt *route, act *teams.Activity) bool {
+	reply := func(text string) {
+		_, _ = rt.connector.ReplyToActivity(ctx, act.ServiceURL, act.Conversation.ID, act.ID, teams.MessageActivity(text))
+	}
+	role, ok := rt.roles.get(act.From.AADObjectID)
+	if !ok {
+		m, err := rt.connector.GetMember(ctx, act.ServiceURL, act.Conversation.ID, act.From.ID)
+		if err != nil {
+			s.log.Warn("member role lookup failed; refusing", "route", rt.cfg.Name, "err", err)
+			reply("I couldn't verify your access right now. Please try again later.")
+			return false
+		}
+		role = strings.ToLower(m.UserRole)
+		rt.roles.put(act.From.AADObjectID, role)
+	}
+	if role == "guest" {
+		s.log.Info("guest refused", "route", rt.cfg.Name)
+		reply("Sorry, guests can't use this agent.")
+		return false
+	}
+	return true
+}
+
+// roleCache remembers Teams member roles for a while, so a guest check is not a roster call
+// per message. It is bounded: when full it starts over.
+type roleCache struct {
+	mu   sync.Mutex
+	ttl  time.Duration
+	max  int
+	data map[string]roleEntry
+}
+
+type roleEntry struct {
+	role    string
+	expires time.Time
+}
+
+func newRoleCache(ttl time.Duration, max int) *roleCache {
+	return &roleCache{ttl: ttl, max: max, data: map[string]roleEntry{}}
+}
+
+func (c *roleCache) get(user string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.data[user]
+	if !ok || time.Now().After(e.expires) {
+		return "", false
+	}
+	return e.role, true
+}
+
+func (c *roleCache) put(user, role string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.data) >= c.max {
+		c.data = map[string]roleEntry{}
+	}
+	c.data[user] = roleEntry{role: role, expires: time.Now().Add(c.ttl)}
 }
 
 // background runs work detached from the inbound request but tracked for graceful shutdown.

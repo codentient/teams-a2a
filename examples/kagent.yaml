@@ -26,6 +26,8 @@ routes:
       # registration for system:serviceaccount:teams-a2a:teams-a2a-gateway.
       auth: {type: workloadIdentity}
     allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+    # The agent holds cluster permissions: list who may use it (Entra object ids).
+    allowedUsers: ["11111111-1111-1111-1111-111111111111"]
     sessionScope: user
     welcome: "Hi! I'm the Kubernetes agent. Ask me about the cluster. Type /help for commands."
     agent:

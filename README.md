@@ -70,6 +70,7 @@ routes:
     bot: {appId: "00000000-0000-0000-0000-000000000001", tenantId: "00000000-0000-0000-0000-0000000000aa",
           auth: {type: clientSecret, clientSecret: {value: dev}}}
     allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+    allowAllTenantUsers: true
     agent: {cardURL: http://127.0.0.1:8083/agents/kagent/demo/.well-known/agent-card.json}
 EOF
 go run ./cmd/teams-a2a-gateway -config /tmp/gw.yaml
@@ -109,7 +110,8 @@ Example configs:
 | `bot.appId`, `bot.tenantId` | required | The Azure Bot / Entra app. Routing uses the validated token audience. |
 | `bot.auth.type` | `clientSecret` | Also `workloadIdentity` (AKS) or `managedIdentity`. |
 | `allowedTenants` | required | Activities from other tenants are dropped. |
-| `allowedUsers` | all | Optional list of Entra object ids. |
+| `allowedUsers` / `allowAllTenantUsers` | required: one of them | Who may use the agent: a list of Entra object ids, or `allowAllTenantUsers: true` for every user of `allowedTenants`. To limit by Entra group, use a Teams app permission policy (and app setup policy) for the bot's Teams app. |
+| `denyGuests` | `false` | Refuse B2B guests (their activities carry your tenant id). The role is looked up through the Bot Connector, cached for an hour, and access is refused if it can't be verified. |
 | `sessionScope` | `conversation` | `user` gives each person their own agent session in group chats and channels. |
 | `approvalPolicy` | `requester` | Only the person who started a request can answer its prompts, `/cancel` it, or discard it with `/new` (until it is older than `approvalTTL`). `anyone` lets any chat member do so. |
 | `approvalTTL` | `30m` | A tool approval not answered in time is rejected (1m to 24h). |

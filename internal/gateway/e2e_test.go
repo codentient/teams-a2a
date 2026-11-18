@@ -102,6 +102,7 @@ routes:
   - name: demo
     bot: %[5]s
     allowedTenants: [%[3]s]
+    allowAllTenantUsers: true
     sessionScope: user
     streamInterval: 1s
     welcome: "Hi! I'm the demo agent."

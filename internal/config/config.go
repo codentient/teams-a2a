@@ -94,8 +94,16 @@ type Route struct {
 
 	// AllowedTenants is required: activities from other Entra tenants are dropped.
 	AllowedTenants []string `json:"allowedTenants"`
-	// AllowedUsers optionally restricts the route to specific Entra object IDs.
+	// AllowedUsers restricts the route to specific Entra object IDs. A route must either list
+	// users or set AllowAllTenantUsers: who may drive an agent is an explicit choice.
 	AllowedUsers []string `json:"allowedUsers,omitempty"`
+	// AllowAllTenantUsers lets every user of AllowedTenants use the route, including service
+	// accounts with Teams licences (and B2B guests unless DenyGuests is set).
+	AllowAllTenantUsers bool `json:"allowAllTenantUsers,omitempty"`
+	// DenyGuests refuses users whose Teams role is guest. Guest activities carry the resource
+	// tenant id, so AllowedTenants alone does not exclude them. The role is looked up through
+	// the Bot Connector and cached; if it cannot be verified, the message is refused.
+	DenyGuests bool `json:"denyGuests,omitempty"`
 	// SessionScope is "conversation" (one agent session per Teams chat/thread) or
 	// "user" (one session per user per chat/thread; required when the agent scopes
 	// sessions to the calling identity, as kagent does).
@@ -445,6 +453,12 @@ func (c *Config) Validate() error {
 		}
 		if len(r.AllowedTenants) == 0 {
 			add(fmt.Errorf("%s: allowedTenants must list at least one tenant", p))
+		}
+		switch {
+		case len(r.AllowedUsers) == 0 && !r.AllowAllTenantUsers:
+			add(fmt.Errorf("%s: set allowedUsers, or allowAllTenantUsers: true to let every user of allowedTenants use this agent", p))
+		case len(r.AllowedUsers) > 0 && r.AllowAllTenantUsers:
+			add(fmt.Errorf("%s: allowedUsers and allowAllTenantUsers are mutually exclusive", p))
 		}
 		add(oneOf(p+".sessionScope", r.SessionScope, "conversation", "user"))
 		add(oneOf(p+".approvalPolicy", r.ApprovalPolicy, "requester", "anyone"))

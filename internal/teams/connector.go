@@ -195,3 +195,53 @@ func (c *Connector) once(ctx context.Context, op, method, endpoint string, body 
 	_ = json.Unmarshal(data, &rr)
 	return rr.ID, 0, nil
 }
+
+// Member is a conversation member as returned by the Bot Connector roster API.
+type Member struct {
+	ID          string `json:"id"`
+	AADObjectID string `json:"aadObjectId"`
+	// UserRole is "user", "guest" or "anonymous" in Teams.
+	UserRole string `json:"userRole"`
+}
+
+// GetMember looks up one member of a conversation, for example to learn whether the user is a
+// guest. It is not retried: callers that gate access on it treat any error as a refusal.
+func (c *Connector) GetMember(ctx context.Context, serviceURL, conversationID, memberID string) (*Member, error) {
+	base, err := c.policy.Check(serviceURL)
+	if err != nil {
+		return nil, err
+	}
+	endpoint := strings.TrimRight(base.String(), "/") + "/v3/conversations/" + url.PathEscape(conversationID) + "/members/" + url.PathEscape(memberID)
+	token, err := c.tokens.Token(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("acquire bot token: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	start := time.Now()
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		if c.Observe != nil {
+			c.Observe("get_member", 0, time.Since(start))
+		}
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if c.Observe != nil {
+		c.Observe("get_member", resp.StatusCode, time.Since(start))
+	}
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode != http.StatusOK {
+		return nil, &ConnectorError{Status: resp.StatusCode, Body: string(data)}
+	}
+	var m Member
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil, fmt.Errorf("decode member: %w", err)
+	}
+	return &m, nil
+}

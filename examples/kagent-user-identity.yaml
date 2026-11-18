@@ -20,6 +20,8 @@ routes:
       tenantId: "00000000-0000-0000-0000-0000000000aa"
       auth: {type: workloadIdentity}
     allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+    # The agent holds cluster permissions: list who may use it (Entra object ids).
+    allowedUsers: ["11111111-1111-1111-1111-111111111111"]
     sessionScope: user
     agent:
       cardURL: http://agentgateway.kagent.svc:8080/agents/kagent/k8s-agent/.well-known/agent-card.json
