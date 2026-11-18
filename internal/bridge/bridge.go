@@ -83,9 +83,14 @@ type Options struct {
 	TurnTimeout      time.Duration
 	ShowToolActivity bool
 	ApprovalPolicy   string // "requester" or "anyone"
-	ForwardMetadata  bool
-	PollInterval     time.Duration
-	Logger           *slog.Logger
+	// ApprovalTTL is how long a tool approval request can be answered (default 30m). After
+	// that, any answer rejects it.
+	ApprovalTTL time.Duration
+	// Now returns the current time (default time.Now); tests replace it.
+	Now             func() time.Time
+	ForwardMetadata bool
+	PollInterval    time.Duration
+	Logger          *slog.Logger
 	// ObserveTurn, if set, receives the outcome and duration of every turn.
 	ObserveTurn func(outcome string, total, firstOutput time.Duration)
 }
@@ -98,6 +103,12 @@ func New(o Options) *Bridge {
 	}
 	if o.Logger == nil {
 		o.Logger = slog.Default()
+	}
+	if o.ApprovalTTL <= 0 {
+		o.ApprovalTTL = 30 * time.Minute
+	}
+	if o.Now == nil {
+		o.Now = time.Now
 	}
 	return &Bridge{o: o}
 }
@@ -208,6 +219,9 @@ func (b *Bridge) mayAnswer(t Turn, p *store.Pending) bool {
 // not nil, must run once the agent has accepted the message.
 func (b *Bridge) buildMessage(ctx context.Context, t Turn, sess *store.Session, sink Sink) (msg *a2a.Message, onAccepted func(), err error) {
 	p := sess.Pending
+	if p != nil && p.Kind == store.PendingToolApproval && b.o.Now().Sub(p.CreatedAt) > b.o.ApprovalTTL {
+		return b.expireApproval(ctx, sess, sink)
+	}
 	if t.Submission != nil {
 		return b.fromSubmission(ctx, t, sess, sink)
 	}
@@ -221,16 +235,17 @@ func (b *Bridge) buildMessage(ctx context.Context, t Turn, sess *store.Session, 
 	}
 	switch p.Kind {
 	case store.PendingToolApproval:
+		// Typed text can reject but never approve: "ok" typed for another reason, or a button
+		// that makes the user send "approve", must not run a tool. Only the card's Approve
+		// button, bound to the pending request's nonce, approves.
 		switch strings.ToLower(strings.Trim(strings.TrimSpace(t.Text), ".!")) {
-		case "approve", "approved", "yes", "y", "ok":
-			if p.Incomplete {
-				return nil, nil, sink.Notice(ctx, incompleteNotice)
-			}
-			return b.resolveApproval(ctx, t, sess, sink, true, "")
 		case "reject", "rejected", "deny", "no", "n":
 			return b.resolveApproval(ctx, t, sess, sink, false, "")
 		}
-		return nil, nil, sink.Notice(ctx, "The agent is waiting for your approval. Use the buttons on the card, or reply **approve** or **reject**.")
+		if p.Incomplete {
+			return nil, nil, sink.Notice(ctx, incompleteNotice)
+		}
+		return nil, nil, sink.Notice(ctx, "The agent is waiting for your approval. Use the **Approve** button on the card, or reply **reject**.")
 	case store.PendingAskUser:
 		if len(p.Questions) != 1 || p.Questions[0].Multiple {
 			return nil, nil, sink.Notice(ctx, "Please answer the agent's questions on the card above.")
@@ -315,6 +330,34 @@ func (b *Bridge) resolveApproval(ctx context.Context, t Turn, sess *store.Sessio
 	m := toolApprovalMessage(p.TaskID, p.ContextID, p.ToolIDs, approved, reason, text)
 	sess.Pending = nil
 	return m, retire(ctx, sink, p.CardRef, summary+"\n\n"+toolList(p.Tools)), nil
+}
+
+// expireApproval rejects a tool approval request that was not answered within ApprovalTTL:
+// whatever the answer, the tool does not run, the agent is told why and the card is retired.
+func (b *Bridge) expireApproval(ctx context.Context, sess *store.Session, sink Sink) (*a2a.Message, func(), error) {
+	p := sess.Pending
+	ttl := shortDuration(b.o.ApprovalTTL)
+	reason := "the approval request expired after " + ttl + " without an answer"
+	m := toolApprovalMessage(p.TaskID, p.ContextID, p.ToolIDs, false, reason, "Rejected. Reason: "+reason)
+	sess.Pending = nil
+	b.o.Logger.Info("tool approval expired", "task", p.TaskID, "ttl", b.o.ApprovalTTL)
+	if err := sink.Notice(ctx, "The approval request expired after "+ttl+", so it was rejected. Ask the agent again if it is still needed."); err != nil {
+		b.o.Logger.Warn("send expiry notice", "err", err)
+	}
+	return m, retire(ctx, sink, p.CardRef, "⌛ **Expired** after "+ttl+": not approved\n\n"+toolList(p.Tools)), nil
+}
+
+// shortDuration formats whole hours and minutes, for example "30m", "2h" or "1h30m".
+func shortDuration(d time.Duration) string {
+	d = d.Round(time.Minute)
+	h, m := int(d/time.Hour), int(d%time.Hour/time.Minute)
+	switch {
+	case h == 0:
+		return fmt.Sprintf("%dm", m)
+	case m == 0:
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dh%dm", h, m)
 }
 
 func (b *Bridge) resolveAnswers(ctx context.Context, t Turn, sess *store.Session, sink Sink, answers [][]string) (*a2a.Message, func(), error) {
@@ -490,7 +533,7 @@ func (b *Bridge) pause(ctx context.Context, t Turn, sess *store.Session, acc *ac
 		ContextID:   acc.contextID,
 		Nonce:       newID(),
 		RequesterID: t.User.ID,
-		CreatedAt:   time.Now(),
+		CreatedAt:   b.o.Now(),
 	}
 	req := parseHITL(acc.status)
 	if req == nil {

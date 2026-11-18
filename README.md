@@ -26,8 +26,10 @@ accept their own agents (Foundry). kagent 1.0 has no Teams channel. See
     Adaptive Cards.
   - `/new`, `/cancel` and `/help` commands.
 - **Human in the loop:** kagent `tool_approval_request` and `ask_user_request` pauses become
-  Adaptive Cards (Approve/Reject with a reason, multiple choice, free text). Plain-text replies
-  work too. Only the requester can answer, and cards are retired once used.
+  Adaptive Cards (Approve/Reject with a reason, multiple choice, free text). Tool calls are
+  approved only with the card's Approve button; typing `reject` works, but no typed word
+  approves. Approvals expire after `approvalTTL` (30 minutes) and are then rejected. Questions
+  can be answered in plain text. Only the requester can answer, and cards are retired once used.
 - **Security:**
   - Full Bot Connector JWT validation (issuer, audience, expiry, signature, serviceUrl claim,
     channel endorsement).
@@ -110,6 +112,7 @@ Example configs:
 | `allowedUsers` | all | Optional list of Entra object ids. |
 | `sessionScope` | `conversation` | `user` gives each person their own agent session in group chats and channels. |
 | `approvalPolicy` | `requester` | `anyone` lets any chat member answer HITL prompts. |
+| `approvalTTL` | `30m` | A tool approval not answered in time is rejected (1m to 24h). |
 | `streaming`, `streamInterval` | `true`, `1.5s` | Native streaming in 1:1 chats. The interval must be at least 1s (Teams throttle). |
 | `showToolActivity`, `aiLabel` | `true` | |
 | `turnTimeout` | `10m` | The task is cancelled when the timeout is hit. |
