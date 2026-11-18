@@ -35,9 +35,35 @@ type Reply struct {
 	IsError bool
 }
 
+// artifactBuf holds one artifact. Streamed text chunks are appended to tail (a builder, so a
+// long answer costs linear time) and become a part only when a non-text part follows or the
+// parts are read (security review L2).
 type artifactBuf struct {
-	id    a2a.ArtifactID
-	parts []*a2a.Part
+	id       a2a.ArtifactID
+	parts    []*a2a.Part
+	tail     *strings.Builder
+	tailTmpl *a2a.Part // the first chunk of the trailing text, whose metadata it keeps
+	bytes    int       // text bytes held, for the answer size limit
+}
+
+func (b *artifactBuf) flush() {
+	if b.tail == nil {
+		return
+	}
+	merged := *b.tailTmpl
+	merged.Content = a2a.Text(b.tail.String())
+	b.parts = append(b.parts, &merged)
+	b.tail, b.tailTmpl = nil, nil
+}
+
+// all returns the parts including the trailing text, without changing the buffer.
+func (b *artifactBuf) all() []*a2a.Part {
+	if b.tail == nil {
+		return b.parts
+	}
+	merged := *b.tailTmpl
+	merged.Content = a2a.Text(b.tail.String())
+	return append(b.parts[:len(b.parts):len(b.parts)], &merged)
 }
 
 // accumulator folds a stream of A2A events into the latest view of a turn.
@@ -49,6 +75,11 @@ type accumulator struct {
 	direct    *a2a.Message
 	order     []a2a.ArtifactID
 	artifacts map[a2a.ArtifactID]*artifactBuf
+	// version changes whenever the visible text may have changed, so a stream of chunks does
+	// not need the full text rebuilt per event to know.
+	version int
+	// size is the number of text bytes received in artifacts.
+	size int
 }
 
 func newAccumulator() *accumulator {
@@ -110,9 +141,10 @@ func progressFrom(parts []*a2a.Part) []string {
 
 func (a *accumulator) apply(ev a2a.Event) update {
 	var u update
-	before := a.text()
+	before := a.version
 	switch e := ev.(type) {
 	case *a2a.Message:
+		a.version++
 		a.direct = e
 		if e.ContextID != "" {
 			a.contextID = e.ContextID
@@ -122,6 +154,9 @@ func (a *accumulator) apply(ev a2a.Event) update {
 		a.applyTask(e)
 	case *a2a.TaskStatusUpdateEvent:
 		a.taskID, a.contextID = string(e.TaskID), e.ContextID
+		if e.Status.State == a2a.TaskStateCompleted {
+			a.version++ // the status message can become the answer
+		}
 		a.state = e.Status.State
 		a.status = e.Status.Message
 		if e.Status.State == a2a.TaskStateWorking && e.Status.Message != nil {
@@ -138,16 +173,17 @@ func (a *accumulator) apply(ev a2a.Event) update {
 			a.applyArtifact(e.Artifact, e.Append)
 		}
 	}
-	u.textChanged = a.text() != before
+	u.textChanged = a.version != before
 	return u
 }
 
 func (a *accumulator) applyTask(t *a2a.Task) {
+	a.version++
 	a.taskID, a.contextID = string(t.ID), t.ContextID
 	a.state = t.Status.State
 	a.status = t.Status.Message
 	if len(t.Artifacts) > 0 {
-		a.order, a.artifacts = nil, map[a2a.ArtifactID]*artifactBuf{}
+		a.order, a.artifacts, a.size = nil, map[a2a.ArtifactID]*artifactBuf{}, 0
 		for _, art := range t.Artifacts {
 			a.applyArtifact(art, false)
 		}
@@ -162,20 +198,28 @@ func (a *accumulator) applyArtifact(art *a2a.Artifact, appendParts bool) {
 		a.order = append(a.order, art.ID)
 	}
 	if !appendParts {
-		buf.parts = nil
+		a.size -= buf.bytes
+		buf.parts, buf.tail, buf.tailTmpl, buf.bytes = nil, nil, nil, 0
 	}
 	for _, p := range art.Parts {
-		// Streaming text chunks are merged into the previous text part.
-		if p.Text() != "" && !isThought(p) && len(buf.parts) > 0 {
-			last := buf.parts[len(buf.parts)-1]
-			if _, isText := last.Content.(a2a.Text); isText && !isThought(last) {
-				merged := *last
-				merged.Content = a2a.Text(last.Text() + p.Text())
-				buf.parts[len(buf.parts)-1] = &merged
+		if txt := p.Text(); txt != "" {
+			buf.bytes += len(txt)
+			a.size += len(txt)
+			if !isThought(p) {
+				a.version++
+				// Streaming text chunks are merged into the trailing text part.
+				if buf.tail == nil {
+					buf.tail, buf.tailTmpl = &strings.Builder{}, p
+				}
+				buf.tail.WriteString(txt)
 				continue
 			}
 		}
+		buf.flush()
 		buf.parts = append(buf.parts, p)
+		if visible(p) {
+			a.version++
+		}
 	}
 }
 
@@ -183,7 +227,7 @@ func (a *accumulator) applyArtifact(art *a2a.Artifact, appendParts bool) {
 func (a *accumulator) outputParts() []*a2a.Part {
 	var parts []*a2a.Part
 	for _, id := range a.order {
-		parts = append(parts, a.artifacts[id].parts...)
+		parts = append(parts, a.artifacts[id].all()...)
 	}
 	if len(parts) == 0 && a.direct != nil {
 		parts = a.direct.Parts
