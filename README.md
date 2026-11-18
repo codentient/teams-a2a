@@ -115,7 +115,7 @@ Example configs:
 | `turnTimeout` | `10m` | The task is cancelled when the timeout is hit. |
 | `rateLimit` | 20/min, burst 5 | Per user. |
 | `welcome` | none | Message posted when the bot is added. |
-| `agent.cardURL` | required | kagent: `http://kagent-controller.kagent.svc:8083/agents/<ns>/<name>/.well-known/agent-card.json` |
+| `agent.cardURL` | required | kagent: `http://kagent-controller.kagent.svc:8083/agents/<ns>/<name>/.well-known/agent-card.json`. Redirects are never followed: use the final URL. |
 | `agent.endpoint` | from card | Override for in-cluster card URLs or proxies. Fields: `url`, `binding` (JSONRPC / HTTP+JSON), `protocolVersion` (1.0 / 0.3). |
 | `agent.auth.type` | `none` | Also `bearer`, `tokenFile`, `oauth2ClientCredentials` or `userJWT`. |
 | `agent.identityHeaders` | none | For example `{X-User-Id: aadObjectId}`. Only for trusted networks. |

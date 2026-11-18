@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/codentient/teams-a2a/internal/httpx"
 )
 
 // ServiceURLPolicy decides which Connector endpoints may receive the bot's bearer token.
@@ -83,7 +85,7 @@ type Connector struct {
 }
 
 func NewConnector(tokens TokenSource, policy ServiceURLPolicy, hc *http.Client) *Connector {
-	return &Connector{tokens: tokens, policy: policy, hc: hc}
+	return &Connector{tokens: tokens, policy: policy, hc: httpx.NoRedirects(hc)}
 }
 
 type resourceResponse struct {
