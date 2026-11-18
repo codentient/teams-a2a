@@ -154,6 +154,9 @@ func run() error {
 	}()
 	srv.SetReady()
 	log.Info("listening", "addr", ln.Addr().String(), "version", version, "routes", len(cfg.Routes), "store", cfg.Store.Type)
+	if len(cfg.Routes) == 0 {
+		log.Warn("no routes configured: every Bot Service request is rejected until a route is added")
+	}
 
 	select {
 	case <-ctx.Done():

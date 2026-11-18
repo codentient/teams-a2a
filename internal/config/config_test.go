@@ -111,3 +111,13 @@ func TestExampleConfigsAreValid(t *testing.T) {
 		}
 	}
 }
+
+func TestNoRoutesIsValid(t *testing.T) {
+	c, err := Parse([]byte("server: {listen: \":3978\"}\n"))
+	if err != nil {
+		t.Fatalf("a gateway without routes must be valid (bots are added later): %v", err)
+	}
+	if len(c.Routes) != 0 {
+		t.Fatalf("routes = %d", len(c.Routes))
+	}
+}
