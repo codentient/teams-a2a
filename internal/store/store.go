@@ -13,6 +13,9 @@ type Session struct {
 	ContextID string `json:"contextId,omitempty"`
 	// RunningTaskID is set while a turn is in flight so /cancel can reach it.
 	RunningTaskID string `json:"runningTaskId,omitempty"`
+	// RunningBy and RunningByName identify who started the running turn.
+	RunningBy     string `json:"runningBy,omitempty"`
+	RunningByName string `json:"runningByName,omitempty"`
 	// Pending is set while the agent waits for the user (A2A INPUT_REQUIRED / AUTH_REQUIRED).
 	Pending   *Pending  `json:"pending,omitempty"`
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -37,8 +40,9 @@ type Pending struct {
 	// otherwise untrusted user input.
 	Nonce string `json:"nonce"`
 	// CardRef is the channel's id for the prompt card, used to retire it once answered.
-	CardRef     string `json:"cardRef,omitempty"`
-	RequesterID string `json:"requesterId"`
+	CardRef       string `json:"cardRef,omitempty"`
+	RequesterID   string `json:"requesterId"`
+	RequesterName string `json:"requesterName,omitempty"`
 	// Incomplete is set when the person was not shown the whole request (the card was too
 	// large for the channel or failed to send). Such a request can be rejected, not approved.
 	Incomplete bool      `json:"incomplete,omitempty"`

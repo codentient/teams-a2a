@@ -167,6 +167,9 @@ func (b *Bridge) Handle(ctx context.Context, t Turn, sink Sink) error {
 	}
 
 	if t.Submission == nil && (cmd == "/new" || cmd == "/reset") {
+		if owner := b.otherOwner(t, sess); owner != "" {
+			return sink.Notice(ctx, "Only "+owner+" can start a new conversation while their request is open.")
+		}
 		if sess.Pending != nil && sess.Pending.CardRef != "" {
 			_ = sink.Retire(ctx, sess.Pending.CardRef, "_This request was abandoned when a new conversation started._")
 		}
@@ -200,6 +203,9 @@ func (b *Bridge) cancel(ctx context.Context, t Turn, sink Sink) error {
 	if sess == nil || sess.RunningTaskID == "" {
 		return sink.Notice(ctx, "There's nothing running to cancel.")
 	}
+	if b.o.ApprovalPolicy == "requester" && sess.RunningBy != "" && sess.RunningBy != t.User.ID {
+		return sink.Notice(ctx, "Only "+nameOr(sess.RunningByName)+" can cancel the request they started.")
+	}
 	if err := b.o.Agent.Cancel(ctx, sess.RunningTaskID); err != nil {
 		_ = sink.Notice(ctx, "I couldn't cancel the running request.")
 		return fmt.Errorf("cancel task: %w", err)
@@ -209,6 +215,24 @@ func (b *Bridge) cancel(ctx context.Context, t Turn, sink Sink) error {
 
 const incompleteNotice = "This request couldn't be shown in full here, so it can't be approved from Teams. " +
 	"Reply **reject**, or review it in the agent's own interface."
+
+// otherOwner returns the name of another user whose open request in this session /new would
+// discard, or "" when /new is allowed. With approvalPolicy requester, a member of a shared chat
+// cannot wipe someone else's pending approval or running task. A pending request older than
+// ApprovalTTL no longer protects the chat, so an unanswered question cannot lock it.
+func (b *Bridge) otherOwner(t Turn, sess *store.Session) string {
+	if b.o.ApprovalPolicy != "requester" {
+		return ""
+	}
+	if sess.RunningTaskID != "" && sess.RunningBy != "" && sess.RunningBy != t.User.ID {
+		return nameOr(sess.RunningByName)
+	}
+	if p := sess.Pending; p != nil && p.RequesterID != "" && p.RequesterID != t.User.ID &&
+		b.o.Now().Sub(p.CreatedAt) <= b.o.ApprovalTTL {
+		return nameOr(p.RequesterName)
+	}
+	return ""
+}
 
 func (b *Bridge) mayAnswer(t Turn, p *store.Pending) bool {
 	return b.o.ApprovalPolicy == "anyone" || p.RequesterID == "" || p.RequesterID == t.User.ID
@@ -407,6 +431,7 @@ func (b *Bridge) run(ctx context.Context, log *slog.Logger, t Turn, sess *store.
 		if !savedRunning && acc.taskID != "" {
 			savedRunning = true
 			sess.RunningTaskID = acc.taskID
+			sess.RunningBy, sess.RunningByName = t.User.ID, t.User.Name
 			if acc.contextID != "" {
 				sess.ContextID = acc.contextID
 			}
@@ -438,7 +463,7 @@ func (b *Bridge) run(ctx context.Context, log *slog.Logger, t Turn, sess *store.
 	defer fcancel()
 
 	outcome := "completed"
-	sess.RunningTaskID = ""
+	sess.RunningTaskID, sess.RunningBy, sess.RunningByName = "", "", ""
 	if acc.contextID != "" {
 		sess.ContextID = acc.contextID
 	}
@@ -528,12 +553,13 @@ func (b *Bridge) poll(ctx context.Context, acc *accumulator) error {
 // pause records a pending request and asks the user for input.
 func (b *Bridge) pause(ctx context.Context, t Turn, sess *store.Session, acc *accumulator, sink Sink) {
 	p := &store.Pending{
-		Kind:        store.PendingInput,
-		TaskID:      acc.taskID,
-		ContextID:   acc.contextID,
-		Nonce:       newID(),
-		RequesterID: t.User.ID,
-		CreatedAt:   b.o.Now(),
+		Kind:          store.PendingInput,
+		TaskID:        acc.taskID,
+		ContextID:     acc.contextID,
+		Nonce:         newID(),
+		RequesterID:   t.User.ID,
+		RequesterName: t.User.Name,
+		CreatedAt:     b.o.Now(),
 	}
 	req := parseHITL(acc.status)
 	if req == nil {
