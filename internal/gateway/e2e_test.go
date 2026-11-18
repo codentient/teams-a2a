@@ -55,6 +55,8 @@ type opts struct {
 	cardBase string
 	// bot replaces the route's bot block (default: appId/tenantId inline, secret from env).
 	bot string
+	// logger captures the gateway's logs (default: discarded).
+	logger *slog.Logger
 }
 
 func newEnv(t *testing.T, o opts) *env {
@@ -77,6 +79,7 @@ func newEnv(t *testing.T, o opts) *env {
 	t.Cleanup(ts.Close)
 
 	t.Setenv("TEST_BOT_SECRET", "s3cret")
+	t.Setenv("TEST_AGENT_TOKEN", "agent-token")
 	e.ms.SetClientSecret(appID, "s3cret")
 	bot := o.bot
 	if bot == "" {
@@ -89,7 +92,7 @@ func newEnv(t *testing.T, o opts) *env {
 	if agentCfg == "" {
 		agentCfg = fmt.Sprintf(`
       cardURL: %s/agents/kagent/demo/.well-known/agent-card.json
-      auth: {type: bearer, token: {value: agent-token}}
+      auth: {type: bearer, token: {env: TEST_AGENT_TOKEN}}
       identityHeaders: {X-User-Id: aadObjectId}`, ts.URL)
 	}
 	yamlCfg := fmt.Sprintf(`
@@ -125,6 +128,9 @@ routes:
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if o.logger != nil {
+		log = o.logger
+	}
 	if os.Getenv("GATEWAY_TEST_LOGS") != "" {
 		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	}
@@ -520,7 +526,7 @@ func TestCrossOriginCardIsRefused(t *testing.T) {
 	defer evil.Close()
 	e := newEnv(t, opts{agentCfg: fmt.Sprintf(`
       cardURL: %s/.well-known/agent-card.json
-      auth: {type: bearer, token: {value: agent-token}}`, evil.URL)})
+      auth: {type: bearer, token: {env: TEST_AGENT_TOKEN}}`, evil.URL)})
 	e.send(e.activity("hello"))
 	e.waitFinal("couldn't get an answer from the agent")
 }

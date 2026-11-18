@@ -68,12 +68,12 @@ teams:
 routes:
   - name: demo
     bot: {appId: "00000000-0000-0000-0000-000000000001", tenantId: "00000000-0000-0000-0000-0000000000aa",
-          auth: {type: clientSecret, clientSecret: {value: dev}}}
+          auth: {type: clientSecret, clientSecret: {env: BOT_SECRET}}}
     allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
     allowAllTenantUsers: true
     agent: {cardURL: http://127.0.0.1:8083/agents/kagent/demo/.well-known/agent-card.json}
 EOF
-go run ./cmd/teams-a2a-gateway -config /tmp/gw.yaml
+BOT_SECRET=dev go run ./cmd/teams-a2a-gateway -config /tmp/gw.yaml
 ```
 
 To test the image and Helm chart in a throwaway kind cluster, run `deploy/kind/smoke.sh`.

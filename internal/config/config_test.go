@@ -179,3 +179,49 @@ func TestRouteRequiresAnExplicitAccessChoice(t *testing.T) {
 		t.Fatalf("allowedUsers together with allowAllTenantUsers is contradictory, got %v", err)
 	}
 }
+
+// Security review M6 and L11: trust anchors, secrets, headers and allowlists.
+func TestWeakTrustAnchorsSecretsAndHeadersAreRejected(t *testing.T) {
+	agent := "auth: {type: tokenFile, tokenFile: /var/run/secrets/kagent/token}"
+	cases := map[string]struct{ cfg, want string }{
+		"http metadata URL":               {"teams: {openIdMetadataURL: http://login.botframework.com/v1/.well-known/openidconfiguration}\n" + minimal, "openIdMetadataURL"},
+		"http login authority":            {"teams: {loginAuthority: http://login.microsoftonline.com}\n" + minimal, "loginAuthority"},
+		"http oauth2 token URL":           {strings.Replace(minimal, agent, "auth: {type: oauth2ClientCredentials, oauth2: {tokenURL: http://idp.example/token, clientId: c, clientSecret: {env: S}}}", 1), "tokenURL"},
+		"inline secret":                   {strings.Replace(minimal, agent, "auth: {type: bearer, token: {value: s3cret}}", 1), "inline"},
+		"Host header":                     {strings.Replace(minimal, agent, agent+"\n      headers: {Host: evil.example}", 1), "Host"},
+		"Cookie header":                   {strings.Replace(minimal, agent, agent+"\n      headers: {Cookie: a=b}", 1), "Cookie"},
+		"Transfer-Encoding":               {strings.Replace(minimal, agent, agent+"\n      headers: {Transfer-Encoding: chunked}", 1), "Transfer-Encoding"},
+		"X-Forwarded-For identity header": {strings.Replace(minimal, agent, agent+"\n      identityHeaders: {X-Forwarded-For: aadObjectId}", 1), "X-Forwarded-For"},
+		"*.net allowlist":                 {"teams: {serviceUrlAllowlist: [\"*.net\"]}\n" + minimal, "serviceUrlAllowlist"},
+		"bare * allowlist":                {"teams: {serviceUrlAllowlist: [\"*\"]}\n" + minimal, "serviceUrlAllowlist"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse([]byte(tc.cfg)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("want an error mentioning %q, got %v", tc.want, err)
+			}
+		})
+	}
+	ok := map[string]string{
+		"insecure endpoints for tests": "teams: {openIdMetadataURL: http://127.0.0.1:4000/v1/.well-known/openidconfiguration, loginAuthority: http://127.0.0.1:4000, serviceUrlAllowlist: [127.0.0.1], allowInsecureServiceURLs: true}\n" + minimal,
+		"inline secret with dev flag":  "server: {allowInlineSecrets: true}\n" + strings.Replace(minimal, agent, "auth: {type: bearer, token: {value: s3cret}}", 1),
+		"two-label wildcard":           "teams: {serviceUrlAllowlist: [\"*.botframework.com\", smba.trafficmanager.net]}\n" + minimal,
+	}
+	for name, cfg := range ok {
+		t.Run("ok: "+name, func(t *testing.T) {
+			if _, err := Parse([]byte(cfg)); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestDefaultBodyLimitFitsTeamsActivities(t *testing.T) {
+	c, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.MaxBodyBytes != 256<<10 {
+		t.Fatalf("default maxBodyBytes = %d, want 256 KiB (security review L8)", c.Server.MaxBodyBytes)
+	}
+}
