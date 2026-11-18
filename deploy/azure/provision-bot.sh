@@ -9,15 +9,29 @@
 #   K8S_NAMESPACE=teams-a2a K8S_SERVICE_ACCOUNT=gw-teams-a2a-gateway \
 #   ./provision-bot.sh
 #
-# Without AKS_OIDC_ISSUER a client secret is created instead and printed once.
+# Without AKS_OIDC_ISSUER a client secret is created instead and written to the Key Vault
+# KEY_VAULT as SECRET_NAME (default teams-client-secret); it is never printed.
+# To reuse an existing app registration, pass its APP_ID: an app is never adopted by name.
 set -euo pipefail
 : "${RESOURCE_GROUP:?}" "${BOT_NAME:?}" "${ENDPOINT:?}"
 case "$ENDPOINT" in https://*/api/messages) ;; *) echo "ENDPOINT must be https://<host>/api/messages" >&2; exit 1 ;; esac
 
 TENANT_ID=$(az account show --query tenantId -o tsv)
 
-APP_ID=$(az ad app list --display-name "$BOT_NAME" --query '[0].appId' -o tsv)
-if [[ -z "$APP_ID" ]]; then
+if [[ -z "${AKS_OIDC_ISSUER:-}" ]]; then
+  : "${KEY_VAULT:?KEY_VAULT is required: the client secret is written there, never printed}"
+fi
+SECRET_NAME=${SECRET_NAME:-teams-client-secret}
+
+if [[ -n "${APP_ID:-}" ]]; then
+  az ad app show --id "$APP_ID" --query appId -o tsv >/dev/null
+else
+  # Display names are not unique: never adopt someone else's app with the same name.
+  existing=$(az ad app list --display-name "$BOT_NAME" --query 'length(@)' -o tsv)
+  if [[ "$existing" != 0 ]]; then
+    echo "An app registration named '$BOT_NAME' already exists; pass APP_ID=<app id> to reuse it explicitly." >&2
+    exit 1
+  fi
   APP_ID=$(az ad app create --display-name "$BOT_NAME" --sign-in-audience AzureADMyOrg --query appId -o tsv)
   az ad sp create --id "$APP_ID" >/dev/null
 fi
@@ -35,7 +49,9 @@ JSON
   echo "federated credential: $subject (use bot.auth.type: workloadIdentity)"
 else
   SECRET=$(az ad app credential reset --id "$APP_ID" --display-name teams-a2a --years 1 --query password -o tsv)
-  echo "client secret (store it in a secret manager now, it is not shown again): $SECRET"
+  az keyvault secret set --vault-name "$KEY_VAULT" --name "$SECRET_NAME" --file <(printf '%s' "$SECRET") --output none
+  unset SECRET
+  echo "client secret written to Key Vault $KEY_VAULT as $SECRET_NAME (mount it with the chart's keyVault.secrets)"
 fi
 
 if ! az bot show -g "$RESOURCE_GROUP" -n "$BOT_NAME" >/dev/null 2>&1; then
@@ -53,7 +69,7 @@ Done. Gateway route snippet:
     bot:
       appId: "${APP_ID}"
       tenantId: "${TENANT_ID}"
-      auth: {type: $([[ -n "${AKS_OIDC_ISSUER:-}" ]] && echo workloadIdentity || echo "clientSecret, clientSecret: {env: BOT_SECRET}")}
+      auth: {type: $([[ -n "${AKS_OIDC_ISSUER:-}" ]] && echo workloadIdentity || echo "clientSecret, clientSecret: {file: /mnt/secrets-store/${SECRET_NAME}}")}
     allowedTenants: ["${TENANT_ID}"]
     allowedUsers: ["<Entra object id>"] # or allowAllTenantUsers: true (add denyGuests: true)
 

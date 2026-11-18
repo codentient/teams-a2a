@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -71,6 +72,8 @@ type Deps struct {
 	HTTPClient *http.Client
 	// AgentHTTPClient, if set, is used for A2A calls (long-lived streams need no overall timeout).
 	AgentHTTPClient *http.Client
+	// Version is reported as teams_a2a_build_info{version}.
+	Version string
 }
 
 func New(cfg *config.Config, d Deps) (*Server, error) {
@@ -88,6 +91,7 @@ func New(cfg *config.Config, d Deps) (*Server, error) {
 		appIDs = append(appIDs, r.Bot.AppID)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	d.Metrics.BuildInfo.WithLabelValues(d.Version).Set(1)
 	s := &Server{
 		cfg:       cfg,
 		log:       d.Logger,
@@ -188,7 +192,16 @@ func (s *Server) SetNotReady() {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/messages", s.handleMessages)
-	return mux
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		sw := &statusWriter{ResponseWriter: w, code: http.StatusOK}
+		mux.ServeHTTP(sw, r)
+		if r.URL.Path == "/api/messages" {
+			code := strconv.Itoa(sw.code)
+			s.metrics.HTTPRequests.WithLabelValues(code).Inc()
+			s.metrics.HTTPDuration.WithLabelValues(code).Observe(time.Since(start).Seconds())
+		}
+	})
 }
 
 // AdminHandler serves health, metrics and the user-JWT JWKS. Do not expose it publicly.
@@ -421,6 +434,17 @@ func (s *Server) releaseUserTurn(user string) {
 	if s.userTurns[user]--; s.userTurns[user] <= 0 {
 		delete(s.userTurns, user)
 	}
+}
+
+// statusWriter records the response status for metrics.
+type statusWriter struct {
+	http.ResponseWriter
+	code int
+}
+
+func (w *statusWriter) WriteHeader(code int) {
+	w.code = code
+	w.ResponseWriter.WriteHeader(code)
 }
 
 // agentClient returns hc, or a copy whose transport waits up to timeout for the agent's first
