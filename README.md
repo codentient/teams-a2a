@@ -111,7 +111,7 @@ Example configs:
 | `allowedTenants` | required | Activities from other tenants are dropped. |
 | `allowedUsers` | all | Optional list of Entra object ids. |
 | `sessionScope` | `conversation` | `user` gives each person their own agent session in group chats and channels. |
-| `approvalPolicy` | `requester` | `anyone` lets any chat member answer HITL prompts. |
+| `approvalPolicy` | `requester` | Only the person who started a request can answer its prompts, `/cancel` it, or discard it with `/new` (until it is older than `approvalTTL`). `anyone` lets any chat member do so. |
 | `approvalTTL` | `30m` | A tool approval not answered in time is rejected (1m to 24h). |
 | `streaming`, `streamInterval` | `true`, `1.5s` | Native streaming in 1:1 chats. The interval must be at least 1s (Teams throttle). |
 | `showToolActivity`, `aiLabel` | `true` | |
