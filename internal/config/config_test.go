@@ -121,3 +121,24 @@ func TestNoRoutesIsValid(t *testing.T) {
 		t.Fatalf("routes = %d", len(c.Routes))
 	}
 }
+
+func TestAgentCardsConfig(t *testing.T) {
+	c, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Routes[0].Agent.Cards.Enabled {
+		t.Fatal("agent cards must be disabled by default")
+	}
+	agent := "auth: {type: tokenFile, tokenFile: /var/run/secrets/kagent/token}"
+	ok := strings.Replace(minimal, agent, agent+"\n      cards: {enabled: true, allowedHosts: [docs.example.com, \"*.payretailers.com\"]}", 1)
+	if c, err := Parse([]byte(ok)); err != nil || !c.Routes[0].Agent.Cards.Enabled {
+		t.Fatalf("valid cards config rejected: %v", err)
+	}
+	for _, bad := range []string{"*", "*.com", "https://docs.example.com", "docs.example.com/path", "docs.example.com:443", "localhost"} {
+		cfg := strings.Replace(minimal, agent, agent+"\n      cards: {enabled: true, allowedHosts: [\""+bad+"\"]}", 1)
+		if _, err := Parse([]byte(cfg)); err == nil || !strings.Contains(err.Error(), "allowedHosts") {
+			t.Errorf("allowedHosts %q must be rejected, got %v", bad, err)
+		}
+	}
+}

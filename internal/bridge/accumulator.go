@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -261,11 +262,11 @@ func (a *accumulator) reply() Reply {
 				text = append(text, fmt.Sprintf("[%s](%s)", escapeLinkText(label), u.String()))
 			}
 		case a2a.Raw:
-			if strings.HasPrefix(p.MediaType, "image/") && len(c) <= maxImageBytes {
+			if mt, ok := safeImage(p.MediaType, c); ok {
 				r.Images = append(r.Images, Image{
-					MediaType: p.MediaType,
+					MediaType: mt,
 					Name:      p.Filename,
-					DataURL:   "data:" + p.MediaType + ";base64," + base64.StdEncoding.EncodeToString(c),
+					DataURL:   "data:" + mt + ";base64," + base64.StdEncoding.EncodeToString(c),
 				})
 			} else {
 				name := p.Filename
@@ -278,6 +279,21 @@ func (a *accumulator) reply() Reply {
 	}
 	r.Text = strings.Join(text, "\n\n")
 	return r
+}
+
+// safeImage accepts PNG, JPEG, GIF and WebP whose bytes match the declared type. Other image
+// types (SVG can carry script and external references) and mislabelled data are not shown.
+func safeImage(mediaType string, b []byte) (string, bool) {
+	mt := strings.ToLower(strings.TrimSpace(strings.SplitN(mediaType, ";", 2)[0]))
+	switch mt {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+	default:
+		return "", false
+	}
+	if len(b) == 0 || len(b) > maxImageBytes || http.DetectContentType(b) != mt {
+		return "", false
+	}
+	return mt, true
 }
 
 func escapeLinkText(s string) string {

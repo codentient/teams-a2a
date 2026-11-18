@@ -163,6 +163,18 @@ type Agent struct {
 	HITL string `json:"hitl"`
 	// ForwardMetadata adds Teams context to the A2A message metadata under "teams-a2a-gateway/...".
 	ForwardMetadata *bool `json:"forwardMetadata,omitempty"`
+	// Cards controls agent-supplied Adaptive Cards. They are not shown unless enabled.
+	Cards Cards `json:"cards"`
+}
+
+// Cards controls agent-supplied Adaptive Cards. Agent output is untrusted: cards are dropped
+// unless enabled, and enabled cards are reduced to display elements, images from data URLs or
+// AllowedHosts, and links to AllowedHosts. Buttons that send data or invoke the bot are removed.
+type Cards struct {
+	Enabled bool `json:"enabled"`
+	// AllowedHosts are hosts (exact or "*.suffix") whose https URLs may appear in Image elements
+	// and Action.OpenUrl. Empty: only data: images and no links.
+	AllowedHosts []string `json:"allowedHosts,omitempty"`
 }
 
 type Endpoint struct {
@@ -368,6 +380,15 @@ func validURL(field, raw string, requireHTTPS bool) error {
 	return nil
 }
 
+// validHostPattern accepts "host.domain" or "*.domain.tld": no scheme, path, port or bare wildcard.
+func validHostPattern(h string) bool {
+	h = strings.TrimPrefix(h, "*.")
+	if h == "" || strings.ContainsAny(h, "/:@*?# ") || !strings.Contains(h, ".") {
+		return false
+	}
+	return true
+}
+
 var identityFields = []string{"aadObjectId", "tenantId", "userName", "teamsUserId"}
 
 // Validate checks the configuration for errors. It is called by Parse.
@@ -443,6 +464,11 @@ func (c *Config) Validate() error {
 			add(oneOf(p+".agent.endpoint.protocolVersion", a.Endpoint.ProtocolVersion, "1.0", "0.3"))
 		}
 		add(oneOf(p+".agent.hitl", a.HITL, "auto", "always", "never"))
+		for _, h := range a.Cards.AllowedHosts {
+			if !validHostPattern(h) {
+				add(fmt.Errorf("%s: agent.cards.allowedHosts entry %q must be a host or *.domain.tld", p, h))
+			}
+		}
 		for h, f := range a.IdentityHeaders {
 			if strings.EqualFold(h, "Authorization") {
 				add(fmt.Errorf("%s: agent.identityHeaders may not set Authorization", p))
