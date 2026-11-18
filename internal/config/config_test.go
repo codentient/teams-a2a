@@ -225,3 +225,30 @@ func TestDefaultBodyLimitFitsTeamsActivities(t *testing.T) {
 		t.Fatalf("default maxBodyBytes = %d, want 256 KiB (security review L8)", c.Server.MaxBodyBytes)
 	}
 }
+
+// Security review L4: per-user JWTs with a shared conversation context mix identities.
+func TestUserJWTRequiresUserSessionScope(t *testing.T) {
+	agent := "auth: {type: tokenFile, tokenFile: /var/run/secrets/kagent/token}"
+	jwt := "auth: {type: userJWT, userJWT: {issuer: https://gw, audience: [kagent], signingKeyFile: /k.pem}}"
+	cfg := strings.Replace(minimal, agent, jwt, 1)
+	if _, err := Parse([]byte(cfg)); err == nil || !strings.Contains(err.Error(), "sessionScope") {
+		t.Fatalf("userJWT with sessionScope conversation must be rejected, got %v", err)
+	}
+	cfg = strings.Replace(cfg, "allowAllTenantUsers: true", "allowAllTenantUsers: true\n    sessionScope: user", 1)
+	if _, err := Parse([]byte(cfg)); err != nil {
+		t.Fatalf("userJWT with sessionScope user must be accepted: %v", err)
+	}
+}
+
+func TestDrainDelay(t *testing.T) {
+	c, err := Parse([]byte(minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Server.DrainDelay.Duration != 5*time.Second {
+		t.Fatalf("default drainDelay = %v, want 5s", c.Server.DrainDelay.Duration)
+	}
+	if _, err := Parse([]byte("server: {drainDelay: 40s, shutdownTimeout: 30s}\n" + minimal)); err == nil || !strings.Contains(err.Error(), "drainDelay") {
+		t.Fatalf("drainDelay must be shorter than shutdownTimeout, got %v", err)
+	}
+}

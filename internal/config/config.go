@@ -48,6 +48,9 @@ type Server struct {
 	MaxBodyBytes       int64    `json:"maxBodyBytes"`
 	MaxConcurrentTurns int      `json:"maxConcurrentTurns"`
 	ShutdownTimeout    Duration `json:"shutdownTimeout"`
+	// DrainDelay is how long the gateway reports not-ready on shutdown before it stops
+	// accepting connections, so load balancers stop routing to it first.
+	DrainDelay Duration `json:"drainDelay"`
 	// AllowInlineSecrets permits secrets written into the config ({value: ...}). Development
 	// only: in production use {env: ...} or {file: ...} so secrets stay out of ConfigMaps.
 	AllowInlineSecrets bool   `json:"allowInlineSecrets,omitempty"`
@@ -164,6 +167,9 @@ type Agent struct {
 	// AllowCrossOriginInterfaces lets the card point the gateway (and its credentials) at hosts
 	// other than the card's own host. Off by default to prevent credential exfiltration.
 	AllowCrossOriginInterfaces bool `json:"allowCrossOriginInterfaces,omitempty"`
+	// ResponseHeaderTimeout bounds the wait for the agent's first response byte (default: the
+	// gateway's 2m). Raise it for agents that answer synchronously, such as Rufus (up to 10m).
+	ResponseHeaderTimeout Duration `json:"responseHeaderTimeout"`
 	// CardRefreshInterval controls how often the card is re-fetched.
 	CardRefreshInterval Duration  `json:"cardRefreshInterval"`
 	Auth                AgentAuth `json:"auth"`
@@ -277,6 +283,9 @@ func (c *Config) applyDefaults() {
 	}
 	if s.ShutdownTimeout.Duration == 0 {
 		s.ShutdownTimeout.Duration = 30 * time.Second
+	}
+	if s.DrainDelay.Duration == 0 {
+		s.DrainDelay.Duration = 5 * time.Second
 	}
 	if s.LogLevel == "" {
 		s.LogLevel = "info"
@@ -446,6 +455,9 @@ func (c *Config) Validate() error {
 		add(errors.New("server: tlsCertFile and tlsKeyFile must be set together"))
 	}
 	add(oneOf("server.logLevel", c.Server.LogLevel, "debug", "info", "warn", "error"))
+	if c.Server.DrainDelay.Duration < 0 || c.Server.DrainDelay.Duration >= c.Server.ShutdownTimeout.Duration {
+		add(errors.New("server.drainDelay must be at least 0 and shorter than server.shutdownTimeout"))
+	}
 	add(oneOf("store.type", c.Store.Type, "memory", "redis"))
 	if c.Store.Type == "redis" {
 		if c.Store.Redis.Address == "" {
@@ -528,6 +540,9 @@ func (c *Config) Validate() error {
 			add(oneOf(p+".agent.endpoint.protocolVersion", a.Endpoint.ProtocolVersion, "1.0", "0.3"))
 		}
 		add(oneOf(p+".agent.hitl", a.HITL, "auto", "always", "never"))
+		if d := a.ResponseHeaderTimeout.Duration; d != 0 && (d < time.Second || d > r.TurnTimeout.Duration) {
+			add(fmt.Errorf("%s: agent.responseHeaderTimeout must be between 1s and turnTimeout", p))
+		}
 		for _, h := range a.Cards.AllowedHosts {
 			if !validHostPattern(h) {
 				add(fmt.Errorf("%s: agent.cards.allowedHosts entry %q must be a host or *.domain.tld", p, h))
@@ -579,6 +594,11 @@ func (c *Config) Validate() error {
 			if u == nil {
 				add(fmt.Errorf("%s: agent.auth.userJWT is required", p))
 				break
+			}
+			if r.SessionScope != "user" {
+				// A shared conversation context presented under different per-user identities
+				// mixes users' sessions (security review L4).
+				add(fmt.Errorf("%s: agent.auth.type userJWT requires sessionScope: user", p))
 			}
 			if u.Issuer == "" || len(u.Audience) == 0 || u.SigningKeyFile == "" {
 				add(fmt.Errorf("%s: agent.auth.userJWT needs issuer, audience and signingKeyFile", p))

@@ -124,6 +124,7 @@ Example configs:
 | `agent.endpoint` | from card | Override for in-cluster card URLs or proxies. Fields: `url`, `binding` (JSONRPC / HTTP+JSON), `protocolVersion` (1.0 / 0.3). |
 | `agent.auth.type` | `none` | Also `bearer`, `tokenFile`, `oauth2ClientCredentials` or `userJWT`. |
 | `agent.identityHeaders` | none | For example `{X-User-Id: aadObjectId}`. Only for trusted networks. |
+| `agent.responseHeaderTimeout` | `2m` | How long to wait for the agent's first response byte. Raise it (up to `turnTimeout`) for agents that answer synchronously without streaming, such as Rufus. |
 | `agent.hitl` | `auto` | `always` for BYO-harness agents, whose cards don't declare the extension. |
 | `agent.cards` | off | `{enabled: true, allowedHosts: [docs.example.com, "*.example.org"]}` shows agent-supplied Adaptive Cards after sanitising: display elements only, images from `data:` URLs or allowed hosts, `Action.OpenUrl` to allowed hosts, `Action.ShowCard`; no buttons that send data or invoke the bot. Agent output is untrusted, so keep it off unless the agent needs it. |
 

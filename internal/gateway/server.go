@@ -115,7 +115,7 @@ func New(cfg *config.Config, d Deps) (*Server, error) {
 		}
 		conn := teams.NewConnector(tokens, policy, d.HTTPClient)
 		conn.Observe = d.Metrics.ObserveConnector
-		ag := agent.New(rc.Agent, creds, d.AgentHTTPClient)
+		ag := agent.New(rc.Agent, creds, agentClient(d.AgentHTTPClient, rc.Agent.ResponseHeaderTimeout.Duration))
 		name := rc.Name
 		br := bridge.New(bridge.Options{
 			Store:            d.Store,
@@ -170,6 +170,14 @@ func (s *Server) Warmup(ctx context.Context) error {
 func (s *Server) SetReady() {
 	s.readyMu.Lock()
 	s.ready = true
+	s.readyMu.Unlock()
+}
+
+// SetNotReady makes /readyz fail again. Call it first on shutdown, so load balancers remove the
+// pod before the listener closes and no request lands on a closed port.
+func (s *Server) SetNotReady() {
+	s.readyMu.Lock()
+	s.ready = false
 	s.readyMu.Unlock()
 }
 
@@ -384,6 +392,29 @@ func (s *Server) onMessage(rt *route, act *teams.Activity) string {
 		}
 	}, rt.cfg.TurnTimeout.Duration+2*time.Minute)
 	return "accepted"
+}
+
+// agentClient returns hc, or a copy whose transport waits up to timeout for the agent's first
+// response byte, for agents that answer synchronously.
+func agentClient(hc *http.Client, timeout time.Duration) *http.Client {
+	if timeout <= 0 {
+		return hc
+	}
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	base, ok := hc.Transport.(*http.Transport)
+	if hc.Transport == nil {
+		base, ok = http.DefaultTransport.(*http.Transport)
+	}
+	if !ok {
+		return hc
+	}
+	t := base.Clone()
+	t.ResponseHeaderTimeout = timeout
+	c := *hc
+	c.Transport = t
+	return &c
 }
 
 // memberAllowed enforces denyGuests: guests are refused, and so is everyone whose role cannot

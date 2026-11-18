@@ -170,6 +170,11 @@ func (b *Bridge) Handle(ctx context.Context, t Turn, sink Sink) error {
 		if owner := b.otherOwner(t, sess); owner != "" {
 			return sink.Notice(ctx, "Only "+owner+" can start a new conversation while their request is open.")
 		}
+		discarded := ""
+		if sess.Pending != nil {
+			discarded = sess.Pending.TaskID
+		}
+		b.audit("new_conversation", t.User, "context", sess.ContextID, "discardedTask", discarded)
 		if sess.Pending != nil && sess.Pending.CardRef != "" {
 			_ = sink.Retire(ctx, sess.Pending.CardRef, "_This request was abandoned when a new conversation started._")
 		}
@@ -206,6 +211,7 @@ func (b *Bridge) cancel(ctx context.Context, t Turn, sink Sink) error {
 	if b.o.ApprovalPolicy == "requester" && sess.RunningBy != "" && sess.RunningBy != t.User.ID {
 		return sink.Notice(ctx, "Only "+nameOr(sess.RunningByName)+" can cancel the request they started.")
 	}
+	b.audit("cancel", t.User, "task", sess.RunningTaskID, "context", sess.ContextID, "startedBy", sess.RunningBy)
 	if err := b.o.Agent.Cancel(ctx, sess.RunningTaskID); err != nil {
 		_ = sink.Notice(ctx, "I couldn't cancel the running request.")
 		return fmt.Errorf("cancel task: %w", err)
@@ -215,6 +221,13 @@ func (b *Bridge) cancel(ctx context.Context, t Turn, sink Sink) error {
 
 const incompleteNotice = "This request couldn't be shown in full here, so it can't be approved from Teams. " +
 	"Reply **reject**, or review it in the agent's own interface."
+
+// audit records a human decision that changes what the agent does (security review L5): HITL
+// approvals, rejections, expiries and answers, /cancel and /new. Ship these log events, which
+// carry audit=true, to tamper-resistant storage.
+func (b *Bridge) audit(event string, u identity.User, attrs ...any) {
+	b.o.Logger.Info("audit", append([]any{"audit", true, "event", event, "user", u.ID, "userName", u.Name, "tenant", u.TenantID}, attrs...)...)
+}
 
 // otherOwner returns the name of another user whose open request in this session /new would
 // discard, or "" when /new is allowed. With approvalPolicy requester, a member of a shared chat
@@ -244,7 +257,7 @@ func (b *Bridge) mayAnswer(t Turn, p *store.Pending) bool {
 func (b *Bridge) buildMessage(ctx context.Context, t Turn, sess *store.Session, sink Sink) (msg *a2a.Message, onAccepted func(), err error) {
 	p := sess.Pending
 	if p != nil && p.Kind == store.PendingToolApproval && b.o.Now().Sub(p.CreatedAt) > b.o.ApprovalTTL {
-		return b.expireApproval(ctx, sess, sink)
+		return b.expireApproval(ctx, t, sess, sink)
 	}
 	if t.Submission != nil {
 		return b.fromSubmission(ctx, t, sess, sink)
@@ -343,6 +356,12 @@ func (b *Bridge) fromSubmission(ctx context.Context, t Turn, sess *store.Session
 
 func (b *Bridge) resolveApproval(ctx context.Context, t Turn, sess *store.Session, sink Sink, approved bool, reason string) (*a2a.Message, func(), error) {
 	p := sess.Pending
+	decision := "approved"
+	if !approved {
+		decision = "rejected"
+	}
+	b.audit("tool_approval", t.User, "decision", decision, "task", p.TaskID, "context", p.ContextID,
+		"tools", strings.Join(p.Tools, ","), "requester", p.RequesterID, "reason", reason)
 	text, summary := "Approved.", fmt.Sprintf("✅ **Approved** by %s", nameOr(t.User.Name))
 	if !approved {
 		text, summary = "Rejected.", fmt.Sprintf("❌ **Rejected** by %s", nameOr(t.User.Name))
@@ -358,8 +377,10 @@ func (b *Bridge) resolveApproval(ctx context.Context, t Turn, sess *store.Sessio
 
 // expireApproval rejects a tool approval request that was not answered within ApprovalTTL:
 // whatever the answer, the tool does not run, the agent is told why and the card is retired.
-func (b *Bridge) expireApproval(ctx context.Context, sess *store.Session, sink Sink) (*a2a.Message, func(), error) {
+func (b *Bridge) expireApproval(ctx context.Context, t Turn, sess *store.Session, sink Sink) (*a2a.Message, func(), error) {
 	p := sess.Pending
+	b.audit("tool_approval", t.User, "decision", "expired", "task", p.TaskID, "context", p.ContextID,
+		"tools", strings.Join(p.Tools, ","), "requester", p.RequesterID, "ttl", b.o.ApprovalTTL)
 	ttl := shortDuration(b.o.ApprovalTTL)
 	reason := "the approval request expired after " + ttl + " without an answer"
 	m := toolApprovalMessage(p.TaskID, p.ContextID, p.ToolIDs, false, reason, "Rejected. Reason: "+reason)
@@ -386,6 +407,7 @@ func shortDuration(d time.Duration) string {
 
 func (b *Bridge) resolveAnswers(ctx context.Context, t Turn, sess *store.Session, sink Sink, answers [][]string) (*a2a.Message, func(), error) {
 	p := sess.Pending
+	b.audit("ask_user_answer", t.User, "task", p.TaskID, "context", p.ContextID, "requester", p.RequesterID)
 	var lines []string
 	for i, q := range p.Questions {
 		lines = append(lines, fmt.Sprintf("- %s **%s**", q.Text, strings.Join(answers[i], ", ")))
@@ -491,12 +513,12 @@ func (b *Bridge) run(ctx context.Context, log *slog.Logger, t Turn, sess *store.
 		b.pause(fctx, t, sess, acc, sink)
 	case acc.state == a2a.TaskStateFailed || acc.state == a2a.TaskStateRejected:
 		outcome = "failed"
-		detail := truncate(acc.statusText(), 500)
-		if detail == "" {
-			detail = "no details were given"
-		}
+		// The agent's status text can carry stack traces or internal hostnames: log it under a
+		// reference and show the user only the reference (security review L6).
+		ref := newID()[:8]
+		log.Warn("agent reported failure", "state", stateWord(acc.state), "detail", truncate(acc.statusText(), 2000), "ref", ref, "task", acc.taskID)
 		_ = sink.Final(fctx, Reply{IsError: true, Text: withPartial(acc.text(),
-			fmt.Sprintf("⚠️ The agent couldn't complete this request (%s): %s", stateWord(acc.state), detail))})
+			fmt.Sprintf("⚠️ The agent couldn't complete this request (%s). Please try again, or quote ref `%s` when asking for help.", stateWord(acc.state), ref))})
 	case acc.state == a2a.TaskStateCanceled:
 		outcome = "canceled"
 		_ = sink.Final(fctx, Reply{Text: withPartial(acc.text(), "_The request was cancelled._")})
