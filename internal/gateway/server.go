@@ -18,6 +18,8 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"golang.org/x/time/rate"
+
 	"github.com/codentient/teams-a2a/internal/agent"
 	"github.com/codentient/teams-a2a/internal/bridge"
 	"github.com/codentient/teams-a2a/internal/config"
@@ -40,13 +42,15 @@ type route struct {
 
 // Server handles Bot Service traffic for every configured route.
 type Server struct {
-	cfg       *config.Config
-	log       *slog.Logger
-	validator *teams.Validator
-	store     store.Store
-	metrics   *metrics.Metrics
-	routes    map[string]*route // lower-case bot appId
-	signers   []*agent.UserJWTSigner
+	cfg         *config.Config
+	refreshOnce sync.Once
+	rejectLog   *rate.Limiter
+	log         *slog.Logger
+	validator   *teams.Validator
+	store       store.Store
+	metrics     *metrics.Metrics
+	routes      map[string]*route // lower-case bot appId
+	signers     []*agent.UserJWTSigner
 
 	sem     chan struct{}
 	wg      sync.WaitGroup
@@ -92,6 +96,7 @@ func New(cfg *config.Config, d Deps) (*Server, error) {
 		sem:       make(chan struct{}, cfg.Server.MaxConcurrentTurns),
 		baseCtx:   ctx,
 		cancel:    cancel,
+		rejectLog: rate.NewLimiter(1, 5),
 	}
 	policy := teams.ServiceURLPolicy{Allowlist: cfg.Teams.ServiceURLAllowlist, AllowInsecure: cfg.Teams.AllowInsecureServiceURLs}
 	for _, rc := range cfg.Routes {
@@ -145,6 +150,11 @@ func (s *Server) Warmup(ctx context.Context) error {
 	if err := s.validator.Refresh(ctx); err != nil {
 		return err
 	}
+	s.refreshOnce.Do(func() {
+		s.validator.StartBackgroundRefresh(s.baseCtx, func(err error) {
+			s.log.Warn("background signing-key refresh failed; keeping the current keys", "err", err)
+		})
+	})
 	for _, r := range s.routes {
 		if card, err := r.agent.Card(ctx); err != nil {
 			s.log.Warn("agent card not available yet", "route", r.cfg.Name, "err", err)
@@ -200,6 +210,18 @@ func (s *Server) AdminHandler() http.Handler {
 }
 
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
+	reject := func(status int, reason string) {
+		s.metrics.AuthFailures.WithLabelValues(fmt.Sprint(status)).Inc()
+		if s.rejectLog.Allow() { // sampled: unauthenticated traffic must not flood the logs
+			s.log.Warn("rejected inbound request", "status", status, "reason", reason, "remote", r.RemoteAddr)
+		}
+		http.Error(w, http.StatusText(status), status)
+	}
+	// Refuse requests without a bearer token before reading the body (security review L8).
+	if scheme, tok, ok := strings.Cut(r.Header.Get("Authorization"), " "); !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(tok) == "" {
+		reject(http.StatusUnauthorized, "missing bearer token")
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.Server.MaxBodyBytes)
 	var act teams.Activity
 	if err := json.NewDecoder(r.Body).Decode(&act); err != nil {
@@ -213,9 +235,7 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 		if errors.As(err, &ae) {
 			status = ae.Status
 		}
-		s.metrics.AuthFailures.WithLabelValues(fmt.Sprint(status)).Inc()
-		s.log.Warn("rejected inbound request", "status", status, "reason", err.Error(), "remote", r.RemoteAddr)
-		http.Error(w, http.StatusText(status), status)
+		reject(status, err.Error())
 		return
 	}
 	rt := s.routes[strings.ToLower(claims.AppID)]

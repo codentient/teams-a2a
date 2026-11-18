@@ -48,7 +48,10 @@ type Server struct {
 	MaxBodyBytes       int64    `json:"maxBodyBytes"`
 	MaxConcurrentTurns int      `json:"maxConcurrentTurns"`
 	ShutdownTimeout    Duration `json:"shutdownTimeout"`
-	LogLevel           string   `json:"logLevel"`
+	// AllowInlineSecrets permits secrets written into the config ({value: ...}). Development
+	// only: in production use {env: ...} or {file: ...} so secrets stay out of ConfigMaps.
+	AllowInlineSecrets bool   `json:"allowInlineSecrets,omitempty"`
+	LogLevel           string `json:"logLevel"`
 }
 
 type Store struct {
@@ -83,7 +86,8 @@ type Teams struct {
 	ServiceURLAllowlist []string `json:"serviceUrlAllowlist"`
 	// AllowedChannels lists activity channelIds the gateway accepts.
 	AllowedChannels []string `json:"allowedChannels"`
-	// AllowInsecureServiceURLs permits http:// serviceUrls. Tests only.
+	// AllowInsecureServiceURLs permits http:// serviceUrls, OpenID metadata and login
+	// authority. Tests and local simulators only.
 	AllowInsecureServiceURLs bool `json:"allowInsecureServiceURLs,omitempty"`
 }
 
@@ -266,7 +270,7 @@ func (c *Config) applyDefaults() {
 		s.AdminListen = ":9090"
 	}
 	if s.MaxBodyBytes == 0 {
-		s.MaxBodyBytes = 1 << 20
+		s.MaxBodyBytes = 256 << 10 // Teams activities, card submissions included, are far smaller
 	}
 	if s.MaxConcurrentTurns == 0 {
 		s.MaxConcurrentTurns = 256
@@ -394,6 +398,31 @@ func validURL(field, raw string, requireHTTPS bool) error {
 	return nil
 }
 
+// reservedHeader reports headers that config may not set on agent requests: hop-by-hop and
+// framing headers, cookies and the proxy and forwarding headers that upstreams trust.
+func reservedHeader(h string) bool {
+	switch strings.ToLower(h) {
+	case "host", "cookie", "set-cookie", "connection", "keep-alive", "upgrade", "te", "trailer",
+		"transfer-encoding", "content-length", "content-type", "proxy-authorization", "proxy-connection",
+		"forwarded", "x-forwarded-for", "x-forwarded-host", "x-forwarded-proto", "a2a-version":
+		return true
+	}
+	return false
+}
+
+// validAllowlistEntry accepts an exact host or a wildcard with at least two labels after "*."
+// ("*.botframework.com", not "*.net").
+func validAllowlistEntry(h string) bool {
+	if h == "" || strings.ContainsAny(h, "/:@?# ") {
+		return false
+	}
+	suffix, wildcard := strings.CutPrefix(h, "*.")
+	if !wildcard {
+		return !strings.Contains(h, "*")
+	}
+	return !strings.Contains(suffix, "*") && strings.Contains(suffix, ".")
+}
+
 // validHostPattern accepts "host.domain" or "*.domain.tld": no scheme, path, port or bare wildcard.
 func validHostPattern(h string) bool {
 	h = strings.TrimPrefix(h, "*.")
@@ -426,8 +455,20 @@ func (c *Config) Validate() error {
 			add(c.Store.Redis.Password.validate("store.redis.password"))
 		}
 	}
-	add(validURL("teams.openIdMetadataURL", c.Teams.OpenIDMetadataURL, false))
-	add(validURL("teams.loginAuthority", c.Teams.LoginAuthority, false))
+	// Trust anchors: the signing keys and the bot's token endpoint (security review M6).
+	add(validURL("teams.openIdMetadataURL", c.Teams.OpenIDMetadataURL, !c.Teams.AllowInsecureServiceURLs))
+	add(validURL("teams.loginAuthority", c.Teams.LoginAuthority, !c.Teams.AllowInsecureServiceURLs))
+	for _, h := range c.Teams.ServiceURLAllowlist {
+		if !validAllowlistEntry(h) {
+			add(fmt.Errorf("teams.serviceUrlAllowlist entry %q must be a host or *.domain.tld (security review L11)", h))
+		}
+	}
+	inline := func(field string, s *SecretRef) {
+		if s != nil && s.Value != "" && !c.Server.AllowInlineSecrets {
+			add(fmt.Errorf("%s: inline secret values need server.allowInlineSecrets (development only); use {env: ...} or {file: ...}", field))
+		}
+	}
+	inline("store.redis.password", c.Store.Redis.Password)
 	names := map[string]bool{}
 	appIDs := map[string]bool{}
 	for i, r := range c.Routes {
@@ -492,15 +533,26 @@ func (c *Config) Validate() error {
 				add(fmt.Errorf("%s: agent.cards.allowedHosts entry %q must be a host or *.domain.tld", p, h))
 			}
 		}
+		inline(p+".bot.auth.clientSecret", r.Bot.Auth.ClientSecret)
+		inline(p+".agent.auth.token", a.Auth.Token)
+		if a.Auth.OAuth2 != nil {
+			inline(p+".agent.auth.oauth2.clientSecret", a.Auth.OAuth2.ClientSecret)
+		}
 		for h, f := range a.IdentityHeaders {
 			if strings.EqualFold(h, "Authorization") {
 				add(fmt.Errorf("%s: agent.identityHeaders may not set Authorization", p))
+			}
+			if reservedHeader(h) {
+				add(fmt.Errorf("%s: agent.identityHeaders may not set %s", p, h))
 			}
 			add(oneOf(p+".agent.identityHeaders."+h, f, identityFields...))
 		}
 		for h := range a.Headers {
 			if strings.EqualFold(h, "Authorization") {
 				add(fmt.Errorf("%s: use agent.auth instead of a static Authorization header", p))
+			}
+			if reservedHeader(h) {
+				add(fmt.Errorf("%s: agent.headers may not set %s", p, h))
 			}
 		}
 		switch a.Auth.Type {
@@ -517,7 +569,7 @@ func (c *Config) Validate() error {
 				add(fmt.Errorf("%s: agent.auth.oauth2 is required", p))
 				break
 			}
-			add(validURL(p+".agent.auth.oauth2.tokenURL", o.TokenURL, false))
+			add(validURL(p+".agent.auth.oauth2.tokenURL", o.TokenURL, true)) // carries the client secret
 			if o.ClientID == "" {
 				add(fmt.Errorf("%s: agent.auth.oauth2.clientId is required", p))
 			}

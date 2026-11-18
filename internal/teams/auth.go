@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	mrand "math/rand/v2"
 	"net/http"
 	"slices"
 	"strings"
@@ -58,6 +59,8 @@ type Validator struct {
 	fetchedAt   time.Time
 	lastAttempt time.Time
 	refreshMu   sync.Mutex
+
+	onRefreshError func(error)
 }
 
 type signingKey struct {
@@ -154,13 +157,14 @@ func (v *Validator) Validate(ctx context.Context, authHeader string, act *Activi
 func (v *Validator) key(ctx context.Context, kid string) (*signingKey, error) {
 	v.mu.RLock()
 	k, ok := v.keys[kid]
-	stale := v.now().Sub(v.fetchedAt) > keyRefreshInterval
 	v.mu.RUnlock()
-	if ok && !stale {
+	// Known keys are used as cached; keeping them fresh is the background loop's job.
+	if ok {
 		return k, nil
 	}
-	// Unknown kid or stale cache: refresh, but never hammer the metadata endpoint.
-	if err := v.refresh(ctx, !ok); err != nil && !ok {
+	// Unknown kid (Microsoft rotated its keys): refresh at most once per cooldown, so
+	// unauthenticated requests can never drive outbound fetches (security review M5).
+	if err := v.refreshAfterCooldown(ctx); err != nil {
 		return nil, err
 	}
 	v.mu.RLock()
@@ -172,23 +176,31 @@ func (v *Validator) key(ctx context.Context, kid string) (*signingKey, error) {
 }
 
 // Refresh forces a key download. It is used at startup to fail fast on misconfiguration.
-func (v *Validator) Refresh(ctx context.Context) error { return v.refresh(ctx, false) }
-
-func (v *Validator) refresh(ctx context.Context, unknownKid bool) error {
+// Refresh fetches the signing keys now. It is used at startup and by the background loop.
+func (v *Validator) Refresh(ctx context.Context) error {
 	v.refreshMu.Lock()
 	defer v.refreshMu.Unlock()
-	now := v.now()
+	return v.fetchAndStore(ctx)
+}
+
+// refreshAfterCooldown fetches the keys unless a fetch was attempted within minRefetchInterval.
+func (v *Validator) refreshAfterCooldown(ctx context.Context) error {
+	v.refreshMu.Lock()
+	defer v.refreshMu.Unlock()
 	v.mu.RLock()
-	fresh := now.Sub(v.fetchedAt) <= keyRefreshInterval
-	recent := now.Sub(v.lastAttempt) < minRefetchInterval
+	recent := v.now().Sub(v.lastAttempt) < minRefetchInterval
 	v.mu.RUnlock()
-	if (fresh && !unknownKid) || (unknownKid && recent) {
+	if recent {
 		return nil
 	}
+	return v.fetchAndStore(ctx)
+}
+
+func (v *Validator) fetchAndStore(ctx context.Context) error {
+	now := v.now()
 	v.mu.Lock()
 	v.lastAttempt = now
 	v.mu.Unlock()
-
 	keys, err := v.fetchKeys(ctx)
 	if err != nil {
 		return fmt.Errorf("refresh bot connector signing keys: %w", err)
@@ -198,6 +210,43 @@ func (v *Validator) refresh(ctx context.Context, unknownKid bool) error {
 	v.fetchedAt = now
 	v.mu.Unlock()
 	return nil
+}
+
+// StartBackgroundRefresh refreshes the signing keys every keyRefreshInterval (with jitter)
+// until ctx ends, retrying failures with backoff. onError, if set, receives failures. Microsoft
+// requires a refresh at least every 24 hours; requests never trigger one for known keys.
+func (v *Validator) StartBackgroundRefresh(ctx context.Context, onError func(error)) {
+	v.onRefreshError = onError
+	go v.refreshLoop(ctx, keyRefreshInterval, time.Minute)
+}
+
+func (v *Validator) refreshLoop(ctx context.Context, every, retry time.Duration) {
+	wait := jitter(every)
+	backoff := retry
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		if err := v.Refresh(ctx); err != nil {
+			if v.onRefreshError != nil {
+				v.onRefreshError(err)
+			}
+			wait = backoff
+			backoff = min(backoff*2, every)
+			continue
+		}
+		wait, backoff = jitter(every), retry
+	}
+}
+
+// jitter returns d minus up to 10%, so replicas do not refresh in lockstep.
+func jitter(d time.Duration) time.Duration {
+	if d <= 0 {
+		return d
+	}
+	return d - time.Duration(mrand.Int64N(int64(d)/10+1))
 }
 
 func (v *Validator) getJSON(ctx context.Context, url string, out any) error {
