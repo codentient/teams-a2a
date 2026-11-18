@@ -15,5 +15,6 @@ config:
         tenantId: "00000000-0000-0000-0000-0000000000aa"
         auth: {type: clientSecret, clientSecret: {file: /var/run/secrets/teams-a2a/teams-bot/clientSecret}}
       allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+      allowedUsers: ["00000000-0000-0000-0000-00000000a11c"] # the teams-sim user
       agent:
         cardURL: http://demo-agent:8083/agents/kagent/demo/.well-known/agent-card.json

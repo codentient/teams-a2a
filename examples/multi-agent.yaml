@@ -12,7 +12,7 @@ routes:
       tenantId: "00000000-0000-0000-0000-0000000000aa"
       auth: {type: clientSecret, clientSecret: {env: SRE_BOT_SECRET}}
     allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
-    allowedUsers: # optional: restrict to specific Entra object ids
+    allowedUsers: # Entra object ids allowed to use this agent
       - "11111111-1111-1111-1111-111111111111"
     approvalPolicy: requester
     agent:
@@ -25,6 +25,9 @@ routes:
       tenantId: "00000000-0000-0000-0000-0000000000aa"
       auth: {type: managedIdentity} # user-assigned managed identity bot
     allowedTenants: ["00000000-0000-0000-0000-0000000000aa"]
+    # A read-only docs agent: everyone in the tenant, but no B2B guests.
+    allowAllTenantUsers: true
+    denyGuests: true
     rateLimit: {perMinute: 30, burst: 10}
     agent:
       # Any A2A agent works: a LangGraph/ADK/CrewAI agent, Foundry, another vendor...

@@ -16,6 +16,7 @@ routes:
       tenantId: tenant-1
       auth: {type: workloadIdentity}
     allowedTenants: [tenant-1]
+    allowAllTenantUsers: true
     agent:
       cardURL: http://kagent-controller.kagent.svc:8083/agents/kagent/k8s-agent/.well-known/agent-card.json
       auth: {type: tokenFile, tokenFile: /var/run/secrets/kagent/token}
@@ -157,5 +158,24 @@ func TestApprovalTTL(t *testing.T) {
 		if _, err := Parse([]byte(cfg)); err == nil || !strings.Contains(err.Error(), "approvalTTL") {
 			t.Errorf("approvalTTL %s must be rejected, got %v", v, err)
 		}
+	}
+}
+
+// Security review M4: who may use an agent must be an explicit choice.
+func TestRouteRequiresAnExplicitAccessChoice(t *testing.T) {
+	none := strings.Replace(minimal, "\n    allowAllTenantUsers: true", "", 1)
+	if _, err := Parse([]byte(none)); err == nil || !strings.Contains(err.Error(), "allowAllTenantUsers") {
+		t.Fatalf("a route without allowedUsers or allowAllTenantUsers must be rejected, got %v", err)
+	}
+	users := strings.Replace(none, "allowedTenants: [tenant-1]", "allowedTenants: [tenant-1]\n    allowedUsers: [user-1]", 1)
+	if _, err := Parse([]byte(users)); err != nil {
+		t.Fatalf("allowedUsers alone must be accepted: %v", err)
+	}
+	if _, err := Parse([]byte(minimal)); err != nil {
+		t.Fatalf("allowAllTenantUsers alone must be accepted: %v", err)
+	}
+	both := strings.Replace(minimal, "allowedTenants: [tenant-1]", "allowedTenants: [tenant-1]\n    allowedUsers: [user-1]", 1)
+	if _, err := Parse([]byte(both)); err == nil || !strings.Contains(err.Error(), "allowedUsers") {
+		t.Fatalf("allowedUsers together with allowAllTenantUsers is contradictory, got %v", err)
 	}
 }

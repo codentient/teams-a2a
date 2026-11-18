@@ -55,6 +55,7 @@ Done. Gateway route snippet:
       tenantId: "${TENANT_ID}"
       auth: {type: $([[ -n "${AKS_OIDC_ISSUER:-}" ]] && echo workloadIdentity || echo "clientSecret, clientSecret: {env: BOT_SECRET}")}
     allowedTenants: ["${TENANT_ID}"]
+    allowedUsers: ["<Entra object id>"] # or allowAllTenantUsers: true (add denyGuests: true)
 
 Next: BOT_APP_ID=${APP_ID} BOT_NAME="..." DEVELOPER_NAME="..." WEBSITE_URL=https://... deploy/teams-app/package.sh
 EOF

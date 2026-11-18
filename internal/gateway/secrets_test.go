@@ -54,6 +54,7 @@ routes:
   - name: demo
     bot: ` + botWithSecretFile("/nonexistent/teams/clientSecret") + `
     allowedTenants: [` + tenantID + `]
+    allowAllTenantUsers: true
     agent: {cardURL: http://127.0.0.1:1/}
 `))
 	if err != nil {

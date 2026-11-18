@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -75,7 +76,8 @@ type Fake struct {
 	calls   []Call
 	nextID  int
 	signal  chan struct{}
-	failure map[string]int // path substring -> status to return
+	failure map[string]int    // path substring -> status to return
+	roles   map[string]string // aadObjectId -> Teams userRole (default "user")
 }
 
 func New() *Fake { return NewOn(nil) }
@@ -139,6 +141,16 @@ func (f *Fake) SetClientSecret(appID, secret string) {
 	f.ClientSecrets[appID] = secret
 }
 
+// SetRole sets the Teams userRole the roster API reports for a user (default "user").
+func (f *Fake) SetRole(aadObjectID, role string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.roles == nil {
+		f.roles = map[string]string{}
+	}
+	f.roles[aadObjectID] = role
+}
+
 // FailPath makes Connector calls whose path contains substr return status.
 func (f *Fake) FailPath(substr string, status int) {
 	f.mu.Lock()
@@ -151,7 +163,7 @@ func (f *Fake) connector(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	f.mu.Lock()
 	for sub, status := range f.failure {
-		if strings.Contains(r.URL.Path, sub) && r.Method == http.MethodPost && body["type"] == "typing" {
+		if strings.Contains(r.URL.Path, sub) && ((r.Method == http.MethodPost && body["type"] == "typing") || r.Method == http.MethodGet) {
 			f.mu.Unlock()
 			w.WriteHeader(status)
 			return
@@ -167,6 +179,19 @@ func (f *Fake) connector(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Header.Get("Authorization") != "Bearer "+BotToken {
 		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+	if r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/members/") {
+		// Members are addressed by their Teams id "29:<aadObjectId>" in the e2e tests.
+		id, _ := url.PathUnescape(r.URL.EscapedPath()[strings.LastIndex(r.URL.EscapedPath(), "/")+1:])
+		aad := strings.TrimPrefix(id, "29:")
+		f.mu.Lock()
+		role := f.roles[aad]
+		f.mu.Unlock()
+		if role == "" {
+			role = "user"
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"id": id, "aadObjectId": aad, "userRole": role})
 		return
 	}
 	if r.Method == http.MethodPut {
