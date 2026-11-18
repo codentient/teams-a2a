@@ -55,7 +55,7 @@ func TestReplyRendersNonTextParts(t *testing.T) {
 	link := a2a.NewFileURLPart("https://example.com/report.pdf", "application/pdf")
 	link.Filename = "report [final].pdf"
 	unsafe := a2a.NewFileURLPart("javascript:alert(1)", "text/html")
-	img := a2a.NewRawPart([]byte{0x89, 'P', 'N', 'G'})
+	img := a2a.NewRawPart([]byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 'I', 'H', 'D', 'R'})
 	img.MediaType = "image/png"
 	acc.apply(a2a.NewArtifactEvent(info, a2a.NewTextPart("Here you go"), card, data, link, unsafe, img))
 	acc.apply(a2a.NewStatusUpdateEvent(info, a2a.TaskStateCompleted, nil))
@@ -105,5 +105,30 @@ func TestParseHITLRequiresDeclaredExtension(t *testing.T) {
 	m.Metadata["https://kagent.dev/extensions/hitl/v1"] = nested
 	if r := parseHITL(m); r == nil || r.tools()[0].ID != "inner" {
 		t.Errorf("nested pauses must be decided on the subagent's tools: %+v", r)
+	}
+}
+
+func TestImagesAreLimitedToRealRasterImages(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 'I', 'H', 'D', 'R'}
+	part := func(mediaType, name string, b []byte) *a2a.Part {
+		p := a2a.NewRawPart(b)
+		p.MediaType, p.Filename = mediaType, name
+		return p
+	}
+	acc := newAccumulator()
+	acc.apply(a2a.NewArtifactEvent(info,
+		part("image/png", "ok.png", png),
+		part("image/svg+xml", "chart.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>x</script></svg>`)),
+		part("image/png", "fake.png", []byte("<html>not a png</html>")),
+		part("image/jpeg", "fake.jpg", png), // declared type must match the bytes
+	))
+	r := acc.reply()
+	if len(r.Images) != 1 || r.Images[0].Name != "ok.png" || !strings.HasPrefix(r.Images[0].DataURL, "data:image/png;base64,") {
+		t.Fatalf("only the real PNG may be shown, got %+v", r.Images)
+	}
+	for _, name := range []string{"chart.svg", "fake.png", "fake.jpg"} {
+		if !strings.Contains(r.Text, name) {
+			t.Errorf("rejected image %s should be mentioned as a file that cannot be shown: %q", name, r.Text)
+		}
 	}
 }

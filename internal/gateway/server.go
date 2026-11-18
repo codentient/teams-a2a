@@ -346,6 +346,7 @@ func (s *Server) onMessage(rt *route, act *teams.Activity) string {
 		Interval:       rt.cfg.StreamInterval.Duration,
 		AILabel:        rt.cfg.AILabelEnabled(),
 		RequesterOnly:  rt.cfg.ApprovalPolicy == "requester" && !act.IsPersonal(),
+		Cards:          teams.CardPolicy{Enabled: rt.cfg.Agent.Cards.Enabled, AllowedHosts: rt.cfg.Agent.Cards.AllowedHosts},
 		Logger:         s.log.With("route", rt.cfg.Name),
 	})
 	s.background(func(ctx context.Context) {

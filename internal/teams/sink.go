@@ -27,7 +27,9 @@ type SinkOptions struct {
 	Interval      time.Duration
 	AILabel       bool
 	RequesterOnly bool
-	Logger        *slog.Logger
+	// Cards decides which agent-supplied Adaptive Cards are shown, and how they are sanitised.
+	Cards  CardPolicy
+	Logger *slog.Logger
 }
 
 // Sink implements bridge.Sink for Teams. Progress and Partial calls are coalesced and sent
@@ -219,13 +221,28 @@ func (s *Sink) Final(ctx context.Context, r bridge.Reply) error {
 	streamOpen := s.streamID != "" && !s.broken
 
 	var attachments []Attachment
+	hidden := 0
 	for _, c := range r.Cards {
-		attachments = append(attachments, Attachment{ContentType: ContentTypeAdaptiveCard, Content: c})
+		card, ok := SanitizeCard(c, s.o.Cards)
+		if !ok {
+			hidden++
+			continue
+		}
+		attachments = append(attachments, Attachment{ContentType: ContentTypeAdaptiveCard, Content: card})
 	}
 	for _, img := range r.Images {
 		attachments = append(attachments, Attachment{ContentType: img.MediaType, ContentURL: img.DataURL, Name: img.Name})
 	}
 	text := r.Text
+	if hidden > 0 {
+		s.o.Logger.Info("agent card not shown", "cards", hidden, "cardsEnabled", s.o.Cards.Enabled)
+		note := "_(The agent sent a card that is not shown here.)_"
+		if strings.TrimSpace(text) == "" {
+			text = note
+		} else {
+			text += "\n\n" + note
+		}
+	}
 	if strings.TrimSpace(text) == "" && len(attachments) == 0 {
 		if !streamOpen {
 			return nil

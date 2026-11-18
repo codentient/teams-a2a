@@ -40,17 +40,26 @@ func (p ServiceURLPolicy) Check(raw string) (*url.URL, error) {
 		return nil, fmt.Errorf("serviceUrl %q has unsupported scheme", raw)
 	}
 	host := strings.ToLower(u.Hostname())
-	for _, entry := range p.Allowlist {
+	if hostAllowed(host, p.Allowlist) {
+		return u, nil
+	}
+	return nil, fmt.Errorf("serviceUrl host %q is not in the allowlist", host)
+}
+
+// hostAllowed reports whether host matches an allowlist entry: an exact host or "*.suffix".
+func hostAllowed(host string, allowlist []string) bool {
+	host = strings.ToLower(host)
+	for _, entry := range allowlist {
 		entry = strings.ToLower(entry)
 		if suffix, ok := strings.CutPrefix(entry, "*."); ok {
 			if strings.HasSuffix(host, "."+suffix) {
-				return u, nil
+				return true
 			}
 		} else if host == entry {
-			return u, nil
+			return true
 		}
 	}
-	return nil, fmt.Errorf("serviceUrl host %q is not in the allowlist", host)
+	return false
 }
 
 // ConnectorError is a non-2xx response from the Bot Connector.

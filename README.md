@@ -22,7 +22,8 @@ accept their own agents (Foundry). kagent 1.0 has no Teams channel. See
   - "Running `tool`…" progress from kagent tool calls.
   - Threaded replies in channels and @mention handling.
   - AI-generated label on answers.
-  - Agent-supplied Adaptive Cards and images.
+  - Agent-supplied images (PNG, JPEG, GIF, WebP) and, when a route enables them, sanitised
+    Adaptive Cards.
   - `/new`, `/cancel` and `/help` commands.
 - **Human in the loop:** kagent `tool_approval_request` and `ask_user_request` pauses become
   Adaptive Cards (Approve/Reject with a reason, multiple choice, free text). Plain-text replies
@@ -119,6 +120,7 @@ Example configs:
 | `agent.auth.type` | `none` | Also `bearer`, `tokenFile`, `oauth2ClientCredentials` or `userJWT`. |
 | `agent.identityHeaders` | none | For example `{X-User-Id: aadObjectId}`. Only for trusted networks. |
 | `agent.hitl` | `auto` | `always` for BYO-harness agents, whose cards don't declare the extension. |
+| `agent.cards` | off | `{enabled: true, allowedHosts: [docs.example.com, "*.example.org"]}` shows agent-supplied Adaptive Cards after sanitising: display elements only, images from `data:` URLs or allowed hosts, `Action.OpenUrl` to allowed hosts, `Action.ShowCard`; no buttons that send data or invoke the bot. Agent output is untrusted, so keep it off unless the agent needs it. |
 
 Server-level keys (`server`, `store`, `teams`) are documented inline in
 [internal/config/config.go](internal/config/config.go).
