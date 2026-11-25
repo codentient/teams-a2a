@@ -3,7 +3,7 @@ module github.com/codentient/teams-a2a
 go 1.27.4
 
 require (
-	github.com/a2aproject/a2a-go/v2 v2.8.0
+	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/alicebob/miniredis/v2 v2.40.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/prometheus/client_golang v1.25.0
